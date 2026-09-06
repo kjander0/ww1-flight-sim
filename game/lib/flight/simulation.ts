@@ -2,14 +2,34 @@ import { Vector3, Quaternion, Euler } from 'three';
 import { SceneryCollisions } from './collisions';
 import { AIRCRAFT, AircraftType } from './aircraft';
 export const DT = 1 / 60;
+export const BRAKE_DECELERATION = 3.3;
 export const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 export const SPEC = { dryMass: 675, wingArea: 25, fuel: 55, stallAngle: .28, groundHeight: 1.15, maxRpm: 1900 };
+export const MIXTURE_MANAGEMENT_ALTITUDE = 2000;
+export const RADIATOR_DRAG_COEFFICIENT = .014;
+export const PITCH_TRIM_ALPHA = .015;
+export const ELEVATOR_ALPHA_RANGE = .30;
+export const elevatorForceAuthority = (dynamicPressure: number) => clamp(950 / Math.max(dynamicPressure, 1), .35, 1);
+export const pitchInputForAlpha = (alpha: number, dynamicPressure: number) =>
+  clamp((alpha - PITCH_TRIM_ALPHA) / (ELEVATOR_ALPHA_RANGE * elevatorForceAuthority(dynamicPressure)), -1, 1);
 export function coefficients(alpha: number) {
-  const blend = clamp((Math.abs(alpha) - .24) / .16, 0, 1);
-  const cl = (.24 + 4.7 * alpha) * (1 - blend) + Math.sin(2 * alpha) * .65 * blend;
-  return { cl, cd: .043 + .072 * cl * cl + blend * .5 + Math.sin(alpha) ** 2 * .35 };
+  const attachedCl = .24 + 4.7 * alpha;
+  // Keep the attached-flow polar through the critical angle, then blend into
+  // a broadside/flat-plate approximation. The old curve added Cd 0.5 over
+  // only nine degrees, which consumed a loop's energy almost instantly.
+  const blend = clamp((Math.abs(alpha) - SPEC.stallAngle) / .22, 0, 1);
+  const separatedCl = Math.sin(2 * alpha) * .72;
+  const cl = attachedCl * (1 - blend) + separatedCl * blend;
+  const attachedCd = .043 + .072 * attachedCl * attachedCl;
+  const separatedCd = .12 + 1.12 * Math.sin(alpha) ** 2;
+  return { cl, cd: attachedCd * (1 - blend) + separatedCd * blend };
 }
-export function optimalMixture(altitude: number) { return clamp(.85 * Math.exp(-Math.max(0, altitude) / 11000), .3, .85); }
+export function optimalMixture(altitude: number) {
+  const climb=clamp(Math.max(0, altitude) / MIXTURE_MANAGEMENT_ALTITUDE,0,1);
+  if(climb===0)return .85;
+  if(climb===1)return .3;
+  return .85-.55*climb;
+}
 export class FlightSimulation {
   readonly scenery = new SceneryCollisions();
   aircraftType: AircraftType = 'scout';
@@ -21,6 +41,7 @@ export class FlightSimulation {
   isWaterAt: (x:number,z:number)=>boolean = () => false;
   impactVelocity = new Vector3(); impactSpeed = 0; radiatorDrag = 0;
   groundSpeed = 0; lateralSpeed = 0; groundLoad = 0; propClearance = Infinity;
+  dynamicPressure = 0; loadFactor = 0; effectiveElevator = 0;
   crashCause = '';
   position = new Vector3(0, SPEC.groundHeight, 330);
   velocity = new Vector3(); orientation = new Quaternion(); rates = new Vector3();
@@ -39,6 +60,7 @@ export class FlightSimulation {
   private propTip = new Vector3(); private skidTime = 0;
   get mass() { return this.spec.dryMass + this.fuel * .72 + this.bombsRemaining * 30; }
   get indicatedAirspeed() { return this.airspeed * Math.sqrt(Math.exp(-Math.max(0, this.position.y) / 8500)); }
+  get criticalSpeedKmh() { return this.spec.overspeed * 2; }
   reset() {
     this.position.copy(this.spawn); this.velocity.set(0, 0, 0); this.orientation.identity(); this.rates.set(0, 0, 0);
     this.bombsRemaining=this.spec.bombs;this.airframeHealth=1;
@@ -48,6 +70,7 @@ export class FlightSimulation {
     this.stall = false; this.engine = 'off'; this.cranking = 0; this.crashCause = '';
     this.impactSpeed = 0; this.impactVelocity.set(0,0,0); this.radiatorDrag = 0;
     this.groundSpeed = 0; this.lateralSpeed = 0; this.groundLoad = 0; this.propClearance = Infinity; this.skidTime = 0;
+    this.dynamicPressure = 0; this.loadFactor = 0; this.effectiveElevator = 0;
     this.scenery.setAircraftScale(this.spec.span/8.8, this.spec.length);
   }
   crash(cause:string, speed=this.velocity.length()) {
@@ -68,9 +91,11 @@ export class FlightSimulation {
     this.right.set(1, 0, 0).applyQuaternion(this.orientation);
     this.up.set(0, 1, 0).applyQuaternion(this.orientation);
     this.air.copy(this.velocity).sub(this.wind); this.airspeed = this.air.length();
+    if(this.indicatedAirspeed*3.6>=this.criticalSpeedKmh){this.crash('AIRFRAME FAILURE',this.velocity.length());return;}
     this.inverse.copy(this.orientation).invert(); this.local.copy(this.air).applyQuaternion(this.inverse);
     this.alpha = this.airspeed > 3 ? Math.atan2(-this.local.y, -this.local.z) : 0;
-    this.stall = !this.grounded && Math.abs(this.alpha) > SPEC.stallAngle;
+    const absoluteAlpha = Math.abs(this.alpha);
+    this.stall = !this.grounded && (this.stall ? absoluteAlpha > .22 : absoluteAlpha > SPEC.stallAngle);
     const density = 1.225 * Math.exp(-Math.max(this.position.y, 0) / 8500);
     const mixtureError = (c.mixture - optimalMixture(this.position.y)) / .30;
     this.mixtureEfficiency = Math.exp(-mixtureError * mixtureError * 2);
@@ -87,7 +112,7 @@ export class FlightSimulation {
     this.thrust = (running ? this.spec.thrust : 0) * (this.rpm / 1850) ** 2 / (1 + (this.airspeed / 45) ** 2);
     if (running) this.fuel = Math.max(0, this.fuel - 2 * (.0007 + c.throttle * .007) * this.spec.torque/470 * dt);
     const heating = running ? .16 + c.throttle * .56 + (1 - this.mixtureEfficiency) * .2 : 0;
-    const cooling = (this.temperature - 15) * (.0015 + c.radiator * (.0025 + this.airspeed * .00016));
+    const cooling = (this.temperature - 15) * (.0015 + c.radiator * (.0065 + this.airspeed * .0003));
     this.temperature = Math.max(15, this.temperature + (heating - cooling) * dt);
     if (this.temperature > 110) this.health = Math.max(0, this.health - (this.temperature - 110) * .00008 * dt);
     if (this.rpm > 2100) this.health = Math.max(0, this.health - .001 * dt);
@@ -96,8 +121,10 @@ export class FlightSimulation {
     if (running && this.mixtureEfficiency < .55)
       this.health = Math.max(0, this.health - (.55 - this.mixtureEfficiency) * .006 * dt);
     const aero = coefficients(this.alpha); const q = .5 * density * this.airspeed * this.airspeed;
+    this.dynamicPressure = q;
     this.lift = q * this.spec.wingArea * aero.cl;
-    this.radiatorDrag = q * this.spec.wingArea * c.radiator * .007;
+    this.loadFactor = this.lift / Math.max(1, this.mass * 9.81);
+    this.radiatorDrag = q * this.spec.wingArea * c.radiator * RADIATOR_DRAG_COEFFICIENT;
     this.drag = q * this.spec.wingArea * (aero.cd + this.spec.drag-.043) + this.radiatorDrag;
     this.liftDirection.crossVectors(this.right, this.air).normalize();
     this.acceleration.copy(this.forward).multiplyScalar(this.thrust / this.mass);
@@ -106,9 +133,15 @@ export class FlightSimulation {
     this.acceleration.addScaledVector(this.right, -this.local.x * Math.min(1.2, this.airspeed * .03));
     this.acceleration.y -= 9.81;
     this.angles.setFromQuaternion(this.orientation, 'YXZ');
-    const authority = clamp((this.airspeed ** 2 + this.thrust * .025) / 700, 0, 1.6);
-    const pitchTarget = (c.pitch * .46 + (.055 - this.alpha) * 1.6) * authority * this.spec.agility;
-    this.rates.x += (pitchTarget - this.rates.x * 2.6) * dt;
+    const authority = clamp((q + this.thrust * .015) / 430, 0, 4);
+    // A cable-operated elevator becomes heavy in a fast dive: available pilot
+    // force limits deflection, rather than an artificial g or pitch-rate cap.
+    const pilotForceAuthority = elevatorForceAuthority(q);
+    this.effectiveElevator = c.pitch * pilotForceAuthority;
+    const targetAlpha = PITCH_TRIM_ALPHA + this.effectiveElevator * ELEVATOR_ALPHA_RANGE;
+    const pitchAcceleration = (targetAlpha - this.alpha) * 5.2 * authority * this.spec.agility
+      - this.rates.x * (.9 + authority * .42);
+    this.rates.x += pitchAcceleration * dt;
     this.rates.z += (-c.roll * 1.6 * authority * this.spec.agility - this.rates.z * 3.3) * dt;
     const coordinatedYaw = clamp(this.right.y * 9.81 / Math.max(this.airspeed, 16), -.65, .65);
     this.rates.y += (coordinatedYaw - this.rates.y) * Math.min(1, dt * 3);
@@ -149,7 +182,9 @@ export class FlightSimulation {
     this.orientation.multiply(this.rotation).normalize(); this.velocity.addScaledVector(this.acceleration, dt);
     if (this.grounded) {
       const horizontal = Math.hypot(this.velocity.x, this.velocity.z);
-      const friction = (c.brake ? 5.5 : .18) * dt;
+      // Strong enough for a landing rollout, but full power can drag the
+      // wheels so a forgotten brake no longer pins the aircraft in place.
+      const friction = (c.brake ? BRAKE_DECELERATION : .18) * dt;
       if (horizontal > 0) { const scale = Math.max(0, horizontal - friction) / horizontal; this.velocity.x *= scale; this.velocity.z *= scale; }
       // Tyre scrub turns some sideways motion into heat, rather than silently
       // rotating the velocity vector with the fuselage.

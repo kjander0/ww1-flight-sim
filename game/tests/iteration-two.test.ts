@@ -29,7 +29,7 @@ test('opening radiator increases drag and slows aircraft at matched flight state
   const planes=[0,.5,1].map(radiator=>{const s=new FlightSimulation();s.windEnabled=false;s.grounded=false;s.position.set(0,1000,0);s.velocity.set(0,0,-45);s.controls.radiator=radiator;s.temperature=100;s.step();return s;});
   assert.equal(planes[0].radiatorDrag,0);
   assert.ok(Math.abs(planes[2].radiatorDrag-2*planes[1].radiatorDrag)<1e-8);
-  assert.ok(planes[2].drag>planes[0].drag+150);
+  assert.ok(planes[2].drag>planes[0].drag+350);
   assert.ok(planes[2].velocity.length()<planes[0].velocity.length());
   assert.ok(planes[2].temperature<planes[0].temperature);
 });
@@ -60,7 +60,7 @@ test('each type can touch down gently on an elevated field then take off again',
   for(const type of Object.keys(AIRCRAFT) as AircraftType[]){
     const s=new FlightSimulation();s.aircraftType=type;s.reset();s.windEnabled=false;s.groundHeightAt=()=>130;
     s.position.set(1400,131.2,1400);s.grounded=false;s.velocity.set(0,-1,-30);s.orientation.setFromEuler(new T.Euler(-.05,0,0));s.controls.brake=true;
-    for(let i=0;i<8/DT;i++)s.step();assert.equal(s.crashed,false,type);assert.equal(s.grounded,true);assert.ok(s.velocity.length()<.1);
+    for(let i=0;i<10/DT;i++)s.step();assert.equal(s.crashed,false,type);assert.equal(s.grounded,true);assert.ok(s.velocity.length()<.1);
     Object.assign(s.controls,{ignition:true,throttle:1,brake:false});
     for(let i=0;i<45/DT;i++){s.controls.pitch=s.indicatedAirspeed*3.6>s.spec.takeoff?.36:0;s.step();}
     assert.equal(s.crashed,false,type);assert.ok(s.position.y>151,type);

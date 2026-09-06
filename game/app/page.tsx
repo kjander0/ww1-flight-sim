@@ -77,6 +77,14 @@ export default function Home() {
             <NavigationMap info={info} />
           </aside>
           <div className="flight-tools">
+            <Button
+              variant="ghost"
+              disabled={!ready || info?.crashed || !!battle?.winner}
+              title="Temporary test control: raise this aircraft 500 metres"
+              onClick={() => game.current?.raiseForTesting()}
+            >
+              +500 M TEST
+            </Button>
             {aircraft.bombs > 0 && (
               <Button
                 variant="ghost"
@@ -166,12 +174,10 @@ export default function Home() {
           <div className="hangar-instructions">
             <strong>QUICK START</strong>
             <span>
-              Cock the gun · ignition on · release brake · add throttle · rotate
-              at {AIRCRAFT[type].takeoff} km/h
+              Click cockpit controls · drag levers and the yoke · wind wheels
             </span>
             <small>
-              WASD looks around · Q/E slide left/right · operate every aircraft
-              control in the cockpit
+              WASD look · Q/E slide · drag yoke sideways to bank, down to climb
             </small>
           </div>
           <h3>Aircraft</h3>
@@ -190,7 +196,7 @@ export default function Home() {
                 <span>
                   <strong>{AIRCRAFT[key].name}</strong>
                   <small>
-                    {AIRCRAFT[key].role} · ROTATE {AIRCRAFT[key].takeoff} KM/H
+                    {AIRCRAFT[key].role}
                     {key === 'bomber' ? ' · TWIN ENGINE' : ''}
                   </small>
                 </span>
@@ -253,101 +259,65 @@ export default function Home() {
           <DialogTitle>Flight manual</DialogTitle>
           <DialogDescription>
             Three water-cooled biplanes with fixed-pitch propellers and a
-            pilot-operated machine gun. Your flight pauses while this manual is
-            open.
+            complete interactive cockpit. Flight pauses while this manual is open.
           </DialogDescription>
           <dl>
-            <dt>Start & take off</dt>
+            <dt>Cockpit controls</dt>
             <dd>
-              Taxi slowly with low throttle; move the yoke sideways to steer on
-              the ground. Center it before accelerating along the runway. Click
-              IGNITION. Set mixture near 85%, radiator to 50%. Release BRAKE and
-              drag the throttle upward. At 85 km/h in the scout, or 95 km/h in
-              the fighter and bomber, drag the yoke down gently to raise the
-              nose.
+              Click buttons and triggers, drag levers, and wind wheels around
+              their centres. Either mouse button keeps its own control, letting
+              you fly and operate another control together. Settings remain where
+              released. Click IGNITION, release BRAKE, and raise the throttle to
+              start moving.
             </dd>
-            <dt>Bombs & scoring</dt>
+            <dt>Taxi, fly & look</dt>
             <dd>
-              The bomber carries four 30 kg bombs, two under each wing. The
-              first click lifts the square guard over BOMB RELEASE; each later
-              click drops one bomb. Release is disabled on the ground. Fly
-              level over an enemy airfield, dropping
-              before the target to allow for forward travel. Destroying an enemy
-              hangar or tower awards 5 points once; every enemy aircraft crash
-              awards 5 points, regardless of cause. First team to 100 wins.
-              Friendly losses score for the opponent.
+              At low throttle, move the yoke sideways to steer on the ground;
+              centre it for the takeoff run. Drag sideways to bank, down to pull
+              up, and up to lower the nose. Rudder coordination is automatic.
+              WASD looks freely, Q/E slides the pilot sideways, and LEVEL always
+              shows the aircraft&apos;s pitch and bank.
             </dd>
-            <dt>AI & reinforcements</dt>
+            <dt>Engine & fuel</dt>
             <dd>
-              Seven AI pilots join you: three allies and four enemies. Fighters
-              intercept and fire bursts; bombers line up bombing passes and have
-              rear gunners. AI uses the same flight, engine and projectile
-              models. AI pilots start on the apron, taxi, and take off from
-              their runway. Replacements return to the apron after eight
-              seconds. After a crash, enter the hangar to choose your next
-              aircraft without resetting scores.
+              Wind the mixture clockwise to enrich it and the radiator clockwise
+              to open it; one and a half turns spans each range. Use roughly 85%
+              mixture near sea level and lean toward 30% by 2,000 m. An open
+              radiator cools better but adds drag. Poor mixture, overheating,
+              excessive RPM, or empty fuel can stop or damage the engine.
             </dd>
             <dt>Machine gun</dt>
             <dd>
-              Before firing, grab the brass handle on the gun&apos;s right side
-              and drag it fully down, then release. Align the rear ring and
-              front bead with the target. Click and hold the trigger to fire.
-              Tracer rounds show the ballistic path; rounds inherit aircraft
-              velocity and lose speed while gravity pulls them down.
+              Drag the brass cocking handle fully down and release, sight through
+              the ring and bead, then hold the trigger. Bullets inherit aircraft
+              velocity and are affected by drag and gravity. Sustained fire heats
+              the gun, spreading shots and causing jams; let it cool and recock
+              after a stoppage. Each belt contains 250 rounds.
             </dd>
-            <dt>Heat & jams</dt>
+            <dt>Bomber</dt>
             <dd>
-              Sustained fire heats the gun, increasing both shot dispersion and
-              the chance of a stoppage. Release the trigger to let it cool. If
-              GUN JAMMED appears, cycle the cocking handle fully again before
-              firing.
+              The two-seat bomber carries four 30 kg bombs and a defensive rear
+              gunner. Click BOMB RELEASE once to lift its guard, then once per
+              bomb. Bombs cannot be released on the ground; they retain forward
+              momentum, so release before the target.
             </dd>
-            <dt>Fly & look</dt>
+            <dt>Flight, landing & hazards</dt>
             <dd>
-              Drag the yoke sideways to bank, down to pull up, and up to lower
-              the nose. Controls stay where released. WASD looks around,
-              including fully behind you. Q and E slide the pilot left and right
-              inside the cockpit for a clearer view around the gun and fuselage.
-              The LEVEL instrument shows aircraft pitch and bank regardless of
-              where you look. Automatic rudder coordinates turns.
+              Wind affects airspeed and drift. If STALL appears, lower the nose,
+              level the wings, and regain speed. Reduce throttle, flare gently,
+              and brake after touchdown. Runways and clear fields are usable;
+              hard impacts, ground loops, prop strikes, terrain, trees, buildings,
+              water, and leaving the map can destroy the aircraft.
             </dd>
-            <dt>Wind the wheels</dt>
+            <dt>Battle, AI & navigation</dt>
             <dd>
-              Grab a wheel and circle its centre. Clockwise makes the mixture
-              richer or opens the radiator; anticlockwise leans or closes it.
-              One and a half turns covers the full range. Release to retain the
-              setting.
-            </dd>
-            <dt>Engine management</dt>
-            <dd>
-              Lean the mixture gradually as you climb, watching RPM at steady
-              throttle. Opening the radiator increases cooling and aerodynamic
-              drag. Close it partway for speed when temperature permits. A cold
-              engine needs time to warm up.
-            </dd>
-            <dt>Stall & landing</dt>
-            <dd>
-              If STALL appears, push forward, level the wings, and regain
-              airspeed. Approach around 95 km/h in the scout or 105 km/h in the
-              heavier aircraft, with reduced throttle. Flare gently above the
-              grass; brake after touchdown. Clear fields also permit takeoff.
-              Trees, buildings, water and hard landings are dangerous.
-            </dd>
-            <dt>Crashes & navigation</dt>
-            <dd>
-              Harder crashes break off more pieces and throw your viewpoint from
-              the cockpit. HANGAR is always available; leaving away from a
-              stationary home runway counts as an aircraft loss. The map shows
-              your position and all four airfields. After a match ends, NEW
-              MATCH unlocks team selection again.
-            </dd>
-            <dt>Controls & current scope</dt>
-            <dd>
-              WASD controls looking; Q and E slide the pilot left and right. Use
-              the cockpit for ignition, brakes, flight controls, gun handling
-              and bomb release. AI and player losses count equally. Your team
-              stays locked for the round. Destroyed buildings stay destroyed
-              for the match. Simultaneous winning scores produce a draw.
+              MAP shows you, contacts, and all four airfields. Three allied and
+              four enemy AI pilots taxi, take off, dogfight, bomb, and return as
+              replacements after losses. Aircraft crashes and each enemy hangar
+              or tower destroyed award 5 points; first to 100 wins. Your team is
+              locked for the match, damage persists, and simultaneous winning
+              scores produce a draw. Respawn or use HANGAR after a loss; leaving
+              a live aircraft away from a stationary home runway forfeits it.
             </dd>
           </dl>
         </DialogContent>

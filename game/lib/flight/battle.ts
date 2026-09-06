@@ -1,6 +1,6 @@
 import * as T from 'three';
 import { AIRFIELDS, Terrain } from './terrain';
-import { FlightSimulation, DT, clamp, optimalMixture } from './simulation';
+import { FlightSimulation, DT, clamp, optimalMixture, pitchInputForAlpha } from './simulation';
 import { MachineGun, MUZZLE_VELOCITY } from './weapons';
 import { readAttitude } from './attitude';
 import { SceneryCollisions } from './collisions';
@@ -191,11 +191,8 @@ export class Battle {
     const density=1.225*Math.exp(-s.position.y/8500),neededCl=s.mass*9.81/(.5*density*Math.max(24,s.airspeed)**2*s.spec.wingArea*Math.max(.65,Math.cos(a.roll)));
     let alpha=clamp((neededCl-.24)/4.7+(desiredAngle-flightAngle)*.8,.015,.21);
     if(s.airspeed<28||s.stall){alpha=.06;c.roll=clamp(a.roll*3,-1,1);p.mode='RECOVER';}
-    let desiredPitch=flightAngle+alpha;if(aimPitch!==undefined){alpha=clamp(aimPitch-flightAngle,-.04,.22);desiredPitch=flightAngle+alpha;}
-    // A banked coordinated turn needs body pitch rate to hold the horizon.
-    const authority=clamp((s.airspeed**2+s.thrust*.025)/700,0,1.6);
-    const turnCompensation=2.6*s.rates.y*Math.tan(a.roll)/(Math.max(.2,authority)*s.spec.agility*.46);
-    c.pitch=clamp((alpha-.055)*1.6/.46+(desiredPitch-a.pitch)*3-s.rates.x*2+turnCompensation,-.7,1);
+    if(aimPitch!==undefined)alpha=clamp(aimPitch-flightAngle,-.04,.22);
+    c.pitch=pitchInputForAlpha(alpha,s.dynamicPressure);
     c.throttle=clamp(.9+(desiredSpeed-s.airspeed)*.065,.25,1);if(Math.abs(a.roll)>.35||goal.y>s.position.y+30)c.throttle=1;
     if(s.position.y<floor-30){c.throttle=1;c.roll=clamp(a.roll*3,-1,1);c.pitch=Math.max(c.pitch,.48);p.mode='TERRAIN AVOIDANCE';}
   }
@@ -224,7 +221,11 @@ export class Battle {
     }
     p.mode='DEPARTURE CLIMB';c.throttle=1;
     const attitude=readAttitude(s.orientation),climbPitch=clamp((s.indicatedAirspeed-25)*.016,.03,.18);
-    c.pitch=clamp((s.alpha-.055)*1.6/.46+(climbPitch-attitude.pitch)*3-s.rates.x*2,-.4,.65);c.roll=clamp(attitude.roll*3,-.4,.4);
+    const flightAngle=Math.atan2(s.velocity.y,Math.hypot(s.velocity.x,s.velocity.z));
+    const density=1.225*Math.exp(-s.position.y/8500);
+    const neededCl=s.mass*9.81/(.5*density*Math.max(24,s.airspeed)**2*s.spec.wingArea);
+    const climbAlpha=clamp((neededCl-.24)/4.7+(climbPitch-flightAngle)*.8,.015,.18);
+    c.pitch=clamp(pitchInputForAlpha(climbAlpha,s.dynamicPressure),-.4,.65);c.roll=clamp(attitude.roll*3,-.4,.4);
     if(s.grounded)p.departure='takeoff';
     if(s.position.y>base+140){p.departure='flying';}
   }

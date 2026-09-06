@@ -1,6 +1,6 @@
 import * as T from 'three';
 import { FlightSimulation, DT, clamp } from './simulation';
-import { createFuselage, projectThrottleGrip, throttleAngle, throttleAtPointer, WheelWinder } from './cockpit';
+import { createFuselage, projectThrottleGrip, THROTTLE_BASE_Y, throttleAngle, throttleAtPointer, WheelWinder } from './cockpit';
 import { AIRCRAFT, AircraftType } from './aircraft';
 import { AIRFIELDS, Terrain } from './terrain';
 import { WorldView } from './world';
@@ -17,9 +17,21 @@ type Gauge = { needle: T.Group; max: number; read: () => number };
 type MouseButton=0|2;
 type Drag={name:Control;x:number;y:number;initial:number;pitch:number;roll:number;id?:number;grabOffset:T.Vector2;direct:boolean;wheel?:WheelWinder};
 const PILOT_FORWARD_OFFSET=1.0;
+const CONTROL_WHEEL_Y=-.30;
+export const BRAKE_SHAKE_RPM=1400;
+export function overspeedShakeAmount(indicatedKmh:number,limitKmh:number){return clamp((indicatedKmh-limitKmh)/70,0,1.5);}
+export function raiseAircraftForTesting(sim:FlightSimulation,metres=500){if(sim.crashed||metres<=0)return false;sim.position.y+=metres;sim.grounded=false;return true;}
 export function resolveMouseControl<T>(picked:T|null,bound:T|null,chording:boolean){return chording&&bound?bound:picked??bound;}
 export function movePilotLateral(current:number,input:number,dt:number){return clamp(current+input*dt*.48,-.38,.38);}
 export function bombButtonAction(coverOpen:boolean):'open'|'release'{return coverOpen?'release':'open';}
+export function gunBarrelAppearance(heat:number){
+  const glow=clamp((heat-.2)/.8,0,1),orange=glow*glow;
+  return {color:[.106+glow*.894,.141+glow*.18,.125-glow*.095] as const,emissive:[glow,.08*glow+.32*orange,.01*glow] as const,intensity:.2+glow*1.8};
+}
+export function brakeButtonPose(on:boolean,rpm:number,now:number){
+  const warning=on&&rpm>BRAKE_SHAKE_RPM;
+  return {x:.76+(warning?Math.sin(now*.075)*.014:0),y:-.45+(warning?Math.cos(now*.11)*.009:0),z:on?-.48:-.44,rotation:warning?Math.sin(now*.13)*.09:0};
+}
 export class FlightGame {
   private started=false;
   private previewField:number|null=0;
@@ -49,10 +61,11 @@ export class FlightGame {
   private hover: Control | null = null;
   private yaw = 0; private pitch = -.23;private pilotLateral=0; private frame = 0; private last = 0; private accumulator = 0; private reportTime = 0;
   private prevPosition = new T.Vector3(); private prevRotation = new T.Quaternion(); private look = new T.Quaternion();
+  private shakeOffset=new T.Vector3();private shakeRotation=new T.Quaternion();private shakeEuler=new T.Euler(0,0,0,'YXZ');
   private propeller = new T.Group(); private resizeObserver: ResizeObserver;
   private labels: T.Texture[] = []; private fps = 60;
   readonly gun = new MachineGun();
-  private gunTrigger = new T.Group(); private cockingHandle = new T.Group(); private cockTravel = 0;private cockRatchet=0; private gunRecoil = 0; private shownRounds = 0;private shownAmmo=-1;private ammoTexture:T.CanvasTexture|null=null;private bombCover=new T.Group();private bombCoverOpen=false;private bombHand:MouseButton|null=null;private heardBlasts=new Set<number>();
+  private gunTrigger = new T.Group(); private cockingHandle = new T.Group(); private gunBarrelMaterial:T.MeshStandardMaterial|null=null;private cockTravel = 0;private cockRatchet=0; private gunRecoil = 0; private shownRounds = 0;private shownAmmo=-1;private ammoTexture:T.CanvasTexture|null=null;private bombCover=new T.Group();private bombCoverOpen=false;private bombHand:MouseButton|null=null;private heardBlasts=new Set<number>();
   private tracerGeometry = new T.BoxGeometry(1, 1, 1); private tracers: T.InstancedMesh;
   private toolLifecycle = new AbortController();
   private audio: AudioContext | null = null; private oscillators: OscillatorNode[] = []; private gain: GainNode | null = null; private engineNoise: AudioBufferSourceNode | null=null;private noiseGain:GainNode|null=null;private noiseBuffer:AudioBuffer|null=null;private blastNoiseBuffer:AudioBuffer|null=null;
@@ -146,11 +159,11 @@ export class FlightGame {
       this.rod(this.aircraft, [sign * .85, 1.4, -1.95], [sign * 3.15*span, -.25, -.85], .008, dark);
       this.rod(this.aircraft, [sign * .85, -.25, -1.95], [sign * 3.15*span, 1.4, -.85], .008, dark);
     }
-    this.box(this.aircraft, [1.96, .77, .12], [0, -.065, -.64], panelMaterial);
+    this.box(this.aircraft, [1.96, .98, .12], [0, -.17, -.64], panelMaterial);
     this.rod(this.aircraft, [-.98, .34, -.56], [.98, .34, -.56], .045, dark);
     this.label(`${this.sim.spec.name.toUpperCase()}`, 0, .28, -.565, .52);
     const configs: [string, string, number, () => number][] = [
-      ['ALTITUDE', 'm', 2000, () => this.sim.position.y], ['AIRSPEED', 'km/h', 240, () => this.sim.indicatedAirspeed * 3.6],
+      ['ALTITUDE', 'm', 2000, () => this.sim.position.y], ['AIRSPEED', 'km/h', Math.max(240,Math.ceil((this.sim.spec.overspeed+40)/20)*20), () => this.sim.indicatedAirspeed * 3.6],
       ['ENGINE', 'RPM', 2400, () => this.sim.rpm], ['COOLANT', '°C', 140, () => this.sim.temperature], ['FUEL', 'litres', this.sim.spec.fuel, () => this.sim.fuel]
     ];
     configs.forEach(([name, unit, max, read], i) => this.gauge(name, unit, max, read, (i<2?i:i+1)*.3-.75, .065, -.56));
@@ -159,14 +172,14 @@ export class FlightGame {
     const symbol=new T.MeshBasicMaterial({color:'#ecd092'});this.box(this.aircraft,[.08,.009,.003],[-.21,.065,-.55],symbol);this.box(this.aircraft,[.08,.009,.003],[-.09,.065,-.55],symbol);this.box(this.aircraft,[.012,.027,.003],[-.15,.065,-.55],symbol);
     this.label('LEVEL',-.15,-.022,-.547,.13);
     this.label('THROTTLE', -.76, -.22, -.55, .24); this.label('MIXTURE', -.38, -.22, -.55, .24); this.label('RADIATOR', .38, -.22, -.55, .24);
-    const lever = new T.Group(); lever.position.set(-.76, -.4, -.48); this.aircraft.add(lever);
+    const lever = new T.Group(); lever.position.set(-.76, THROTTLE_BASE_Y, -.48); this.aircraft.add(lever);
     this.rod(lever, [0, 0, 0], [0, .16, .03], .018, brass); this.box(lever, [.12, .06, .055], [0, .16, .03], dark); this.knobs.throttle = lever;
-    this.hit('throttle', -.76, -.34, -.39, .23, .28);
+    this.hit('throttle', -.76, -.30, -.39, .23, .28);
     for (const [name, x] of [['mixture', -.38], ['radiator', .38]] as const) {
-      const wheel = new T.Group(); wheel.position.set(x, -.34, -.44); this.aircraft.add(wheel);
+      const wheel = new T.Group(); wheel.position.set(x, CONTROL_WHEEL_Y, -.44); this.aircraft.add(wheel);
       wheel.add(new T.Mesh(new T.TorusGeometry(.068, .014, 5, 12), brass));
       this.box(wheel, [.13, .012, .018], [0, 0, 0], brass); this.box(wheel, [.012, .13, .018], [0, 0, 0], brass);
-      this.knobs[name] = wheel; this.hit(name, x, -.34, -.40, .24, .22);
+      this.knobs[name] = wheel; this.hit(name, x, CONTROL_WHEEL_Y, -.40, .24, .22);
     }
     const yoke = new T.Group(); yoke.position.set(0, -.4, -.2); this.aircraft.add(yoke);
     this.rod(yoke, [0, -.25, -.1], [0, .12, 0], .025, dark);
@@ -174,7 +187,7 @@ export class FlightGame {
     for (const x of [-.17, .17]) this.rod(yoke, [x, .1, 0], [x, .23, 0], .029, timber);
     this.knobs.yoke = yoke; this.hit('yoke', 0, -.27, -.12, .46, .3);
     this.label('IGNITION', .76, -.2, -.54, .25); this.label('BRAKE', .76, -.43, -.54, .22);
-    for (const [name, y] of [['ignition', -.29], ['brake', -.49]] as const) {
+    for (const [name, y] of [['ignition', -.25], ['brake', -.45]] as const) {
       const button = new T.Group(); button.position.set(.76, y, -.44);
       const cap = new T.Mesh(new T.CylinderGeometry(.055, .055, .04, 12), name === 'ignition' ? brass : dark); cap.rotation.x = Math.PI / 2; button.add(cap); this.aircraft.add(button); this.knobs[name] = button;
       this.hit(name, .76, y, -.38, .2, .16);
@@ -185,8 +198,8 @@ export class FlightGame {
     this.aircraft.add(this.propeller);
     this.buildGun(dark, brass, timber);
     if(spec.bombs>0){this.label('BOMB RELEASE',-.48,-.46,-.32,.30);
-    const release=new T.Group();release.position.set(-.48,-.55,-.27);this.box(release,[.12,.065,.045],[0,0,0],this.material('#ad5d34'));this.aircraft.add(release);this.knobs.bomb=release;this.hit('bomb',-.48,-.55,-.23,.22,.11);
-    this.bombCover=new T.Group();this.bombCover.position.set(-.48,-.48,-.235);this.box(this.bombCover,[.17,.14,.028],[0,-.07,0],this.material('#586057'));this.rod(this.bombCover,[-.1,0,0],[.1,0,0],.014,brass);this.aircraft.add(this.bombCover);}
+    const release=new T.Group();release.position.set(-.48,-.51,-.27);this.box(release,[.12,.065,.045],[0,0,0],this.material('#ad5d34'));this.aircraft.add(release);this.knobs.bomb=release;this.hit('bomb',-.48,-.51,-.23,.22,.11);
+    this.bombCover=new T.Group();this.bombCover.position.set(-.48,-.44,-.235);this.box(this.bombCover,[.17,.14,.028],[0,-.07,0],this.material('#586057'));this.rod(this.bombCover,[-.1,0,0],[.1,0,0],.014,brass);this.aircraft.add(this.bombCover);}
     this.buildHands();
   }
 
@@ -219,9 +232,10 @@ export class FlightGame {
   private buildGun(dark: T.Material, brass: T.Material, timber: T.Material) {
     const gun = new T.Group(); gun.position.set(.34, .48, -.55); this.aircraft.add(gun);
     this.box(gun, [.19, .19, .72], [0, 0, -.2], dark);
-    const jacket = new T.Mesh(new T.CylinderGeometry(.062, .062, 2.25, 10), dark); jacket.rotation.x = Math.PI / 2; jacket.position.set(0, .025, -1.66); gun.add(jacket);
-    for (let z = -.72; z > -2.65; z -= .18) { const ring = new T.Mesh(new T.TorusGeometry(.066, .009, 5, 10), dark); ring.position.set(0, .025, z); gun.add(ring); }
-    this.rod(gun, [0, .025, -2.75], [0, .025, -3.05], .028, dark);
+    this.gunBarrelMaterial=new T.MeshStandardMaterial({color:'#1b2420',emissive:'#000000',roughness:.62,metalness:.55,flatShading:true});
+    const jacket = new T.Mesh(new T.CylinderGeometry(.062, .062, 2.25, 10), this.gunBarrelMaterial); jacket.rotation.x = Math.PI / 2; jacket.position.set(0, .025, -1.66); gun.add(jacket);
+    for (let z = -.72; z > -2.65; z -= .18) { const ring = new T.Mesh(new T.TorusGeometry(.066, .009, 5, 10), this.gunBarrelMaterial); ring.position.set(0, .025, z); gun.add(ring); }
+    this.rod(gun, [0, .025, -2.75], [0, .025, -3.05], .028, this.gunBarrelMaterial);
     // Ring-and-bead sight: both are on the true bore line, so gravity and lead still matter.
     const rearSight = new T.Mesh(new T.TorusGeometry(.085, .009, 7, 24), brass); rearSight.position.set(0, .22, .08); gun.add(rearSight);
     this.rod(gun, [0, .135, .08], [0, .22, .08], .007, brass);
@@ -267,7 +281,7 @@ export class FlightGame {
   private wheelAngle(name:'mixture'|'radiator') {
     const ray=this.ray.ray.clone().applyMatrix4(this.aircraft.matrixWorld.clone().invert());
     const point=ray.intersectPlane(new T.Plane(new T.Vector3(0,0,1),.44),new T.Vector3());
-    if(!point)return null;const x=point.x-(name==='mixture'?-.38:.38),y=point.y+.34;
+    if(!point)return null;const x=point.x-(name==='mixture'?-.38:.38),y=point.y-CONTROL_WHEEL_Y;
     return Math.hypot(x,y)<.02?null:Math.atan2(y,x);
   }
   private contextmenu=(e:MouseEvent)=>e.preventDefault();
@@ -320,6 +334,7 @@ export class FlightGame {
   private visibility = () => { this.blur(); this.last = 0; this.accumulator = 0; if (document.hidden && this.audio && this.gain) this.gain.gain.setTargetAtTime(0, this.audio.currentTime, .04); };
   private resize = () => { const w = this.mount.clientWidth, h = this.mount.clientHeight; this.renderer.setSize(w, h); this.target.setSize(Math.round(600 * w / h), 600); this.camera.aspect = w / h; this.camera.fov = w / h < 1.3 ? 75 : 70; this.camera.updateProjectionMatrix(); };
   private setSpawn(){this.sim.spawn.copy(parkingPosition(this.terrain,this.airfieldIndex));}
+  raiseForTesting(){if(this.battle.winner||!raiseAircraftForTesting(this.sim))return false;this.prevPosition.copy(this.sim.position);return true;}
   releaseBomb(sound=true){if(this.paused||this.battle.winner)return;if(sound){this.startAudio();this.playClick('heavy');}if(this.battle.release())this.battle.message=`BOMB AWAY · ${this.sim.bombsRemaining} REMAINING`;else if(this.sim.grounded)this.battle.message='BOMB RELEASE · AIRBORNE ONLY';else if(this.sim.bombsRemaining===0)this.battle.message='NO BOMBS · BOMBER CARRIES FOUR';}
   enterHangar(){
     if(!this.started||this.battle.winner)return false;const runway=stoppedRunway(this.sim),safe=runway>=0&&AIRFIELDS[runway].team===this.battle.playerTeam;
@@ -339,7 +354,7 @@ export class FlightGame {
   }
   private releaseAircraft(){
     const geometries=new Set<T.BufferGeometry>(),materials=new Set<T.Material>();this.aircraft.traverse(o=>{if(o instanceof T.Mesh){geometries.add(o.geometry);for(const m of Array.isArray(o.material)?o.material:[o.material])materials.add(m);}});
-    geometries.forEach(g=>g.dispose());materials.forEach(m=>m.dispose());this.labels.forEach(t=>t.dispose());this.labels=[];this.aircraft.clear();this.gauges=[];this.hits=[];this.knobs={};this.bombRacks.length=0;this.propeller=new T.Group();this.gunTrigger=new T.Group();this.cockingHandle=new T.Group();this.bombCover=new T.Group();this.attitude=null;this.ammoTexture=null;this.shownAmmo=-1;
+    geometries.forEach(g=>g.dispose());materials.forEach(m=>m.dispose());this.labels.forEach(t=>t.dispose());this.labels=[];this.aircraft.clear();this.gauges=[];this.hits=[];this.knobs={};this.bombRacks.length=0;this.propeller=new T.Group();this.gunTrigger=new T.Group();this.cockingHandle=new T.Group();this.gunBarrelMaterial=null;this.bombCover=new T.Group();this.attitude=null;this.ammoTexture=null;this.shownAmmo=-1;
   }
   private startAudio() {
     if (!this.audio) {
@@ -387,7 +402,7 @@ export class FlightGame {
     if (!context?.registerTool) return;
     const validateEmpty = (input: unknown) => { if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).length) throw new Error('Expected an empty object.'); };
     const tools: Tool[] = [
-      { name: 'read_flight_instruments', description: 'Read the current aircraft instruments and persistent cockpit controls.', inputSchema: { type: 'object', properties: {}, additionalProperties: false }, annotations: { readOnlyHint: true }, execute: input => { validateEmpty(input); const s = this.sim; return { altitudeMetres: s.position.y, indicatedAirspeedKmh: s.indicatedAirspeed * 3.6, rpm: s.rpm, temperatureC: s.temperature, fuelLitres: s.fuel, stalled: s.stall, crashed: s.crashed, controls: { ...s.controls } }; } }
+      { name: 'read_flight_instruments', description: 'Read the current aircraft instruments and persistent cockpit controls.', inputSchema: { type: 'object', properties: {}, additionalProperties: false }, annotations: { readOnlyHint: true }, execute: input => { validateEmpty(input); const s = this.sim,indicatedAirspeedKmh=s.indicatedAirspeed*3.6; return { altitudeMetres: s.position.y, indicatedAirspeedKmh,overspeedLimitKmh:s.spec.overspeed,criticalSpeedKmh:s.criticalSpeedKmh,overspeedShake:overspeedShakeAmount(indicatedAirspeedKmh,s.spec.overspeed), rpm: s.rpm, temperatureC: s.temperature, fuelLitres: s.fuel, stalled: s.stall, crashed: s.crashed, controls: { ...s.controls } }; } }
     ];
     for (const tool of tools) try { void Promise.resolve(context.registerTool(tool, { signal: this.toolLifecycle.signal })).catch(() => {}); } catch { /* Optional browser capability; flight remains available. */ }
   }
@@ -442,6 +457,15 @@ export class FlightGame {
         this.crashEffects.update(active?elapsed:0,this.camera);
       }else {this.crashEffects.update(active?elapsed:0,this.camera);this.camera.quaternion.multiply(this.look);}
     }
+    if(active&&!this.sim.crashed){
+      const shake=overspeedShakeAmount(this.sim.indicatedAirspeed*3.6,this.sim.spec.overspeed);
+      if(shake>0){
+        this.shakeOffset.set(Math.sin(now*.091)+Math.sin(now*.173)*.45,Math.cos(now*.117)+Math.sin(now*.209)*.35,Math.sin(now*.151)*.4).multiplyScalar(.018*shake).applyQuaternion(this.aircraft.quaternion);
+        this.camera.position.add(this.shakeOffset);
+        this.shakeEuler.set(Math.sin(now*.137)*.006*shake,Math.cos(now*.163)*.004*shake,Math.sin(now*.103)*.007*shake,'YXZ');this.shakeRotation.setFromEuler(this.shakeEuler);
+        this.camera.quaternion.multiply(this.shakeRotation);
+      }
+    }
     this.camera.updateMatrixWorld();
     const activeBlasts=new Set<number>();for(const blast of this.battle.blasts){activeBlasts.add(blast.id);if(!this.heardBlasts.has(blast.id)){this.heardBlasts.add(blast.id);this.playExplosion(this.camera.position.distanceTo(blast.position));}}if(this.heardBlasts.size>64)for(const id of this.heardBlasts)if(!activeBlasts.has(id))this.heardBlasts.delete(id);
     this.battleView.update(active?elapsed:0,active?this.accumulator/DT:1,this.camera);this.world.updateBuildings(this.battle.buildings);this.bombRacks.forEach((b,i)=>b.visible=i>=this.sim.spec.bombs-this.sim.bombsRemaining);
@@ -451,11 +475,13 @@ export class FlightGame {
     this.knobs.throttle!.rotation.x = throttleAngle(c.throttle);
     this.knobs.mixture!.rotation.z = -c.mixture * Math.PI * 3; this.knobs.radiator!.rotation.z = -c.radiator * Math.PI * 3;
     this.knobs.yoke!.rotation.z = -c.roll * .6; this.knobs.yoke!.rotation.x = c.pitch * .45;
-    this.knobs.ignition!.position.z = c.ignition ? -.47 : -.44; this.knobs.brake!.position.z = c.brake ? -.44 : -.48;
+    this.knobs.ignition!.position.z = c.ignition ? -.47 : -.44;
+    const brakePose=brakeButtonPose(c.brake,this.sim.rpm,now);this.knobs.brake!.position.set(brakePose.x,brakePose.y,brakePose.z);this.knobs.brake!.rotation.z=brakePose.rotation;
     this.cockTravel = [...this.drags.values()].some(d=>d.name==='cocking') ? this.cockTravel : Math.max(0, this.cockTravel - elapsed * 5);
     const needsCock=this.gun.trigger&&(!this.gun.cocked||this.gun.jammed),shake=needsCock?Math.sin(now*.075)*.014:0;this.cockingHandle.position.set(.14+shake,.08+(needsCock?Math.cos(now*.11)*.009:0),-.08+this.cockTravel*.28);this.cockingHandle.rotation.z=needsCock?Math.sin(now*.13)*.09:0;
     if(this.bombCover.parent){const targetRotation=this.bombCoverOpen?-2.25:0;this.bombCover.rotation.x+=(targetRotation-this.bombCover.rotation.x)*Math.min(1,elapsed*18);}
     if (this.gun.roundsFired !== this.shownRounds) { this.shownRounds = this.gun.roundsFired; this.gunRecoil = 1;this.playGunshot(this.gun.heat); }
+    if(this.gunBarrelMaterial){const appearance=gunBarrelAppearance(this.gun.heat);this.gunBarrelMaterial.color.setRGB(...appearance.color);this.gunBarrelMaterial.emissive.setRGB(...appearance.emissive);this.gunBarrelMaterial.emissiveIntensity=appearance.intensity;}
     this.updateAmmoDisplay();
     this.gunRecoil = Math.max(0, this.gunRecoil - elapsed * 18);
     this.gunTrigger.rotation.x = (this.gun.trigger ? -.34 : 0) + this.gunRecoil * .08;
@@ -471,9 +497,9 @@ export class FlightGame {
       const status = this.battle.winner ? `${this.battle.winner} · MATCH COMPLETE` : s.crashed ? `CRASHED · ${s.crashCause || 'IMPACT'} · ENTER HANGAR` : this.gun.roundsRemaining === 0 ? 'GUN EMPTY · ENTER HANGAR TO REARM' : this.gun.jammed ? 'GUN JAMMED · CYCLE COCKING HANDLE' : this.gun.heat > .72 ? 'GUN HOT · DISPERSION INCREASING' : Math.max(Math.abs(s.position.x),Math.abs(s.position.z))>4800?'MAP EDGE · TURN BACK':s.stall ? 'STALL · LOWER THE NOSE' : s.temperature > 110 ? 'ENGINE HOT · OPEN RADIATOR' : s.grounded ? (s.engine === 'off' ? 'PARKED · ENGINE OFF' : c.brake ? 'ENGINE ' + s.engine.toUpperCase() + ' · BRAKE SET' : 'GROUND ROLL · TEAM BATTLE') : 'AIRBORNE · TEAM BATTLE';
       const control = [...this.drags.values()][0]?.name ?? this.hover;
       const value = control === 'yoke' ? `PITCH ${Math.round(c.pitch * 100)}% · ROLL ${Math.round(c.roll * 100)}%` : control === 'ignition' ? c.ignition ? 'ON' : 'OFF' : control === 'brake' ? c.brake ? 'SET — CLICK TO RELEASE' : 'RELEASED' : control === 'trigger' ? this.gun.roundsRemaining === 0 ? 'EMPTY' : this.gun.jammed ? 'JAMMED' : this.gun.cocked ? `READY · ${this.gun.roundsRemaining} ROUNDS` : 'NOT COCKED' : control === 'cocking' ? `${this.gun.cocked ? 'ACTION READY' : 'PULL DOWN FULLY'} · ${Math.round(this.cockTravel * 100)}%` : control === 'bomb' ? `${s.bombsRemaining} REMAINING · CLICK TO RELEASE` : control ? Math.round(c[control] * 100) + '%' : '';
-      const hint = control ? `${control.toUpperCase()} · ${value}${control==='mixture'||control==='radiator'?' · WIND CLOCKWISE TO INCREASE':control==='throttle'||control==='yoke'?' · DRAG TO ADJUST':control==='cocking'?' · DRAG DOWN AND RELEASE':''}` : s.crashed ? 'Enter the hangar to choose another aircraft. Your team score is retained.' : this.gun.roundsRemaining === 0 ? 'Ammunition exhausted. Enter the hangar to rearm.' : this.gun.jammed ? 'The gun has jammed. Drag the brass cocking handle fully down, then release.' : !this.gun.cocked ? 'Cock the gun once: drag its brass side handle fully down, then release.' : !c.ignition ? 'Click IGNITION in the cockpit to start your engine.' : c.brake && s.grounded ? 'Release BRAKE, then drag THROTTLE upward.' : s.grounded && s.airspeed*3.6 < s.spec.takeoff ? `Build speed to ${s.spec.takeoff} km/h, then gently pull the yoke toward you.` : 'Sight through the ring and bead · Hold the gun trigger to fire';
+      const hint = control ? `${control.toUpperCase()} · ${value}${control==='mixture'||control==='radiator'?' · WIND CLOCKWISE TO INCREASE':control==='throttle'||control==='yoke'?' · DRAG TO ADJUST':control==='cocking'?' · DRAG DOWN AND RELEASE':''}` : s.crashed ? 'Enter the hangar to choose another aircraft. Your team score is retained.' : this.gun.roundsRemaining === 0 ? 'Ammunition exhausted. Enter the hangar to rearm.' : this.gun.jammed ? 'The gun has jammed. Drag the brass cocking handle fully down, then release.' : !this.gun.cocked ? 'Cock the gun once: drag its brass side handle fully down, then release.' : !c.ignition ? 'Click IGNITION in the cockpit to start your engine.' : c.brake && s.grounded ? 'Release BRAKE, then drag THROTTLE upward.' : 'Sight through the ring and bead · Hold the gun trigger to fire';
       const attitude=readAttitude(s.orientation);
-      this.report(status, hint, `${this.fps.toFixed(0)} FPS · 60 Hz physics\nALT ${s.position.y.toFixed(1)} m  IAS ${(s.indicatedAirspeed * 3.6).toFixed(1)} km/h\nAoA ${(s.alpha * 180 / Math.PI).toFixed(1)}°  V/S ${s.velocity.y.toFixed(1)} m/s\nLIFT ${s.lift.toFixed(0)} N  DRAG ${s.drag.toFixed(0)} N\nRADIATOR DRAG ${s.radiatorDrag.toFixed(0)} N\nGROUND LOAD ${(s.groundLoad/9.81).toFixed(2)} g  PROP CLEAR ${Number.isFinite(s.propClearance)?s.propClearance.toFixed(2):'—'} m\nROLL ${(attitude.roll*180/Math.PI).toFixed(0)}° PITCH ${(attitude.pitch*180/Math.PI).toFixed(0)}°\nRPM ${s.rpm.toFixed(0)}  TEMP ${s.temperature.toFixed(1)}°C\nGUN ${this.gun.jammed?'JAMMED':this.gun.cocked?'READY':'SAFE'}  HEAT ${(this.gun.heat*100).toFixed(0)}%  AMMO ${this.gun.roundsRemaining}/${AMMO_CAPACITY}\nFUEL ${s.fuel.toFixed(1)} L  ENGINE ${(s.health * 100).toFixed(0)}%\nPOS ${s.position.x.toFixed(0)}, ${s.position.z.toFixed(0)}`,{started:this.started,canHangar:this.canHangar(),aircraftType:s.aircraftType,airfieldIndex:this.airfieldIndex,x:s.position.x,z:s.position.z,heading:-new T.Euler().setFromQuaternion(s.orientation,'YXZ').y*180/Math.PI,altitude:s.position.y,crashed:s.crashed,battle:this.battle.info()});
+      this.report(status, hint, `${this.fps.toFixed(0)} FPS · 60 Hz physics\nALT ${s.position.y.toFixed(1)} m  IAS ${(s.indicatedAirspeed * 3.6).toFixed(1)} km/h  LIMIT ${s.spec.overspeed} km/h\nAoA ${(s.alpha * 180 / Math.PI).toFixed(1)}°  LOAD ${s.loadFactor.toFixed(2)} g  V/S ${s.velocity.y.toFixed(1)} m/s\nLIFT ${s.lift.toFixed(0)} N  DRAG ${s.drag.toFixed(0)} N\nQ ${s.dynamicPressure.toFixed(0)} Pa  ELEV ${(s.effectiveElevator*100).toFixed(0)}%  RADIATOR DRAG ${s.radiatorDrag.toFixed(0)} N\nGROUND LOAD ${(s.groundLoad/9.81).toFixed(2)} g  PROP CLEAR ${Number.isFinite(s.propClearance)?s.propClearance.toFixed(2):'—'} m\nROLL ${(attitude.roll*180/Math.PI).toFixed(0)}° PITCH ${(attitude.pitch*180/Math.PI).toFixed(0)}°\nRPM ${s.rpm.toFixed(0)}  TEMP ${s.temperature.toFixed(1)}°C\nGUN ${this.gun.jammed?'JAMMED':this.gun.cocked?'READY':'SAFE'}  HEAT ${(this.gun.heat*100).toFixed(0)}%  AMMO ${this.gun.roundsRemaining}/${AMMO_CAPACITY}\nFUEL ${s.fuel.toFixed(1)} L  ENGINE ${(s.health * 100).toFixed(0)}%\nPOS ${s.position.x.toFixed(0)}, ${s.position.z.toFixed(0)}`,{started:this.started,canHangar:this.canHangar(),aircraftType:s.aircraftType,airfieldIndex:this.airfieldIndex,x:s.position.x,z:s.position.z,heading:-new T.Euler().setFromQuaternion(s.orientation,'YXZ').y*180/Math.PI,altitude:s.position.y,crashed:s.crashed,battle:this.battle.info()});
     }
   };
   dispose() {

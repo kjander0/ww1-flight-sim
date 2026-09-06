@@ -53,7 +53,7 @@ test('hangar walls and sloping roof collide without a phantom roof above the rid
   assert.equal(world.sweep(new Vector3(0,23,40), new Vector3(0,23,-40), q, q), null);
 });
 test('swept collision prevents tunnelling, stops the aircraft, and reset retains scenery', () => {
-  const s = new FlightSimulation(); s.windEnabled = false; s.grounded = false; s.position.set(0,10,0); s.velocity.set(0,0,-600);
+  const s = new FlightSimulation(); s.windEnabled = false; s.grounded = false; s.position.set(0,10,0); s.velocity.set(0,0,-110);
   s.scenery.addBox('TOWER', new Vector3(-20,0,-5.1), new Vector3(20,20,-5)); s.step();
   assert.equal(s.crashed, true); assert.equal(s.crashCause, 'TOWER'); assert.ok(s.position.z > -5); assert.equal(s.velocity.length(), 0); assert.equal(s.engine, 'off');
   s.reset(); assert.equal(s.crashed, false); assert.equal(s.crashCause, ''); assert.equal(s.scenery.obstacleCount, 1);

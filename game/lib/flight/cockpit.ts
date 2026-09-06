@@ -13,11 +13,12 @@ export function createFuselage(material: Material) {
 }
 
 export const throttleAngle = (setting: number) => 1 - Math.max(0, Math.min(1, setting)) * 1.5;
+export const THROTTLE_BASE_Y = -.36;
 const grip = new Vector3();
 /** Position of the actual grip, including perspective and the current head/aircraft pose. */
 export function projectThrottleGrip(setting: number, aircraftMatrix: Matrix4, camera: Camera, width: number, height: number, out: Vector2) {
   const a = throttleAngle(setting);
-  grip.set(-.76, -.4 + Math.cos(a) * .16 - Math.sin(a) * .03, -.48 + Math.sin(a) * .16 + Math.cos(a) * .03);
+  grip.set(-.76, THROTTLE_BASE_Y + Math.cos(a) * .16 - Math.sin(a) * .03, -.48 + Math.sin(a) * .16 + Math.cos(a) * .03);
   grip.applyMatrix4(aircraftMatrix).project(camera);
   return out.set((grip.x + 1) * width / 2, (1 - grip.y) * height / 2);
 }

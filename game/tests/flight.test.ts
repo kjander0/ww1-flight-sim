@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Euler, Vector3, PerspectiveCamera, Quaternion } from 'three';
-import { FlightSimulation, DT, SPEC, coefficients, optimalMixture } from '../lib/flight/simulation';
-import { bombButtonAction, movePilotLateral, resolveMouseControl } from '../lib/flight/game';
+import { BRAKE_DECELERATION, FlightSimulation, DT, SPEC, coefficients, optimalMixture } from '../lib/flight/simulation';
+import { BRAKE_SHAKE_RPM, brakeButtonPose, bombButtonAction, gunBarrelAppearance, movePilotLateral, overspeedShakeAmount, raiseAircraftForTesting, resolveMouseControl } from '../lib/flight/game';
+import { AIRCRAFT } from '../lib/flight/aircraft';
 
 function run(s: FlightSimulation, seconds: number, control?: (s: FlightSimulation) => void) {
   for (let i = 0; i < Math.round(seconds / DT); i++) { control?.(s); s.step(); }
@@ -19,12 +20,40 @@ test('covered bomb release requires one click to open before it can release',()=
   assert.equal(bombButtonAction(false),'open');assert.equal(bombButtonAction(true),'release');
 });
 function airborne() { const s = new FlightSimulation(); s.windEnabled = false; s.position.set(0, 500, 0); s.velocity.set(0, 0, -40); s.grounded = false; return s; }
-test('parked aircraft stays on its gear, engine off and full throttle with brake set', () => {
+test('brake holds an unpowered aircraft but full engine power can overcome it', () => {
   const s = new FlightSimulation(); run(s, 60); assert.equal(s.position.y, SPEC.groundHeight); assert.ok(s.position.distanceTo(new Vector3(0, SPEC.groundHeight, 330)) < .1);
-  s.controls.ignition = true; s.controls.throttle = 1; run(s, 30); assert.ok(s.rpm > 1500); assert.ok(s.velocity.length() < .1); assert.equal(s.crashed, false);
+  s.controls.ignition = true; s.controls.throttle = 1; run(s, 10); assert.ok(s.rpm > 1500); assert.ok(s.groundSpeed > .5); assert.equal(s.crashed, false);
+});
+test('brake control presses inward and shakes only when set above warning RPM',()=>{
+  const released=brakeButtonPose(false,BRAKE_SHAKE_RPM+100,20),set=brakeButtonPose(true,0,20),warning=brakeButtonPose(true,BRAKE_SHAKE_RPM+100,20);
+  assert.ok(set.z<released.z);assert.equal(set.x,.76);assert.equal(set.y,-.45);assert.ok(warning.x!==set.x||warning.y!==set.y);assert.ok(BRAKE_DECELERATION<5.5);
+});
+test('each aircraft has a distinct progressive overspeed shake threshold',()=>{
+  assert.deepEqual([AIRCRAFT.scout.overspeed,AIRCRAFT.fighter.overspeed,AIRCRAFT.bomber.overspeed],[210,250,190]);
+  for(const spec of Object.values(AIRCRAFT)){
+    assert.equal(overspeedShakeAmount(spec.overspeed-1,spec.overspeed),0);
+    assert.equal(overspeedShakeAmount(spec.overspeed,spec.overspeed),0);
+    assert.ok(overspeedShakeAmount(spec.overspeed+50,spec.overspeed)>overspeedShakeAmount(spec.overspeed+20,spec.overspeed));
+  }
+  assert.equal(overspeedShakeAmount(400,200),1.5);
+});
+test('temporary test lift raises a live aircraft 500 metres without changing its motion',()=>{
+  const s=new FlightSimulation();s.position.set(12,40,-8);s.velocity.set(3,-2,-30);s.orientation.setFromEuler(new Euler(.2,.3,.1));
+  const velocity=s.velocity.clone(),orientation=s.orientation.clone();
+  assert.equal(raiseAircraftForTesting(s),true);assert.deepEqual(s.position.toArray(),[12,540,-8]);assert.equal(s.grounded,false);
+  assert.ok(s.velocity.equals(velocity));assert.ok(s.orientation.equals(orientation));
+  s.crashed=true;assert.equal(raiseAircraftForTesting(s),false);assert.equal(s.position.y,540);
+});
+test('each aircraft suffers airframe breakup at twice its overspeed threshold',()=>{
+  for(const type of Object.keys(AIRCRAFT) as (keyof typeof AIRCRAFT)[]){
+    const safe=new FlightSimulation();safe.aircraftType=type;safe.windEnabled=false;safe.position.set(0,1000,0);safe.velocity.set(0,0,-(safe.spec.overspeed*2-.1)/3.6/Math.sqrt(Math.exp(-1000/8500)));safe.grounded=false;safe.step();
+    assert.equal(safe.crashed,false,`${type} broke below critical speed`);
+    const critical=new FlightSimulation();critical.aircraftType=type;critical.windEnabled=false;critical.position.set(0,1000,0);critical.velocity.set(0,0,-critical.spec.overspeed*2/3.6/Math.sqrt(Math.exp(-1000/8500)));critical.grounded=false;critical.step();
+    assert.equal(critical.criticalSpeedKmh,critical.spec.overspeed*2);assert.equal(critical.crashed,true);assert.equal(critical.crashCause,'AIRFRAME FAILURE');assert.ok(critical.impactSpeed>0);
+  }
 });
 test('sustained bad mixture damages a running engine',()=>{
-  const s=airborne();s.controls.ignition=true;s.controls.throttle=.7;s.controls.mixture=.55;s.engine='running';s.rpm=1600;const health=s.health;run(s,4);assert.ok(s.mixtureEfficiency<.55);assert.ok(s.health<health);
+  const s=airborne();s.controls.ignition=true;s.controls.throttle=.7;s.controls.mixture=.4;s.engine='running';s.rpm=1600;const health=s.health;run(s,4);assert.ok(s.mixtureEfficiency<.55);assert.ok(s.health<health);
 });
 test('fuel tanks are halved and running fuel burn is doubled',()=>{
   const s=new FlightSimulation();assert.equal(s.spec.fuel,55);assert.equal(s.fuel,55);s.aircraftType='fighter';s.reset();assert.equal(s.fuel,62.5);s.aircraftType='bomber';s.reset();assert.equal(s.fuel,105);
@@ -38,10 +67,31 @@ test('takeoff from a standing start before the runway end, followed by a stable 
   assert.ok(liftoffDistance !== undefined && liftoffDistance < 770, `liftoff distance ${liftoffDistance}`);
   t.diagnostic(`Liftoff after ${liftoffDistance?.toFixed(0)} m; altitude ${s.position.y.toFixed(0)} m after 45 s.`);
 });
-test('lift curve loses lift and gains drag beyond critical angle', () => {
-  assert.ok(coefficients(.24).cl > coefficients(.42).cl * 2);
-  assert.ok(coefficients(.42).cd > coefficients(.24).cd * 2);
+test('lift curve transitions smoothly into separated flow beyond critical angle', () => {
+  assert.ok(coefficients(.28).cl > coefficients(.5).cl);
+  assert.ok(coefficients(.5).cd > coefficients(.28).cd);
+  assert.ok(coefficients(.3).cd < coefficients(.5).cd);
   const s = airborne(); s.orientation.setFromEuler(new Euler(.4, 0, 0)); s.step(); assert.equal(s.stall, true); assert.ok(s.airspeed > 35);
+});
+test('scout can complete a clean loop from 240 km/h IAS', () => {
+  const s=new FlightSimulation(),altitude=2000;
+  s.windEnabled=false;s.position.set(0,altitude,0);
+  s.velocity.set(0,0,-240/3.6/Math.sqrt(Math.exp(-altitude/8500)));s.grounded=false;
+  Object.assign(s.controls,{ignition:true,throttle:1,pitch:.5,radiator:0,mixture:optimalMixture(altitude)});
+  s.engine='running';s.rpm=1850;
+  let rotation=0,maxAlpha=0,minSpeed=Infinity;
+  for(let i=0;i<20/DT&&rotation<Math.PI*2;i++){
+    s.step();rotation+=s.rates.x*DT;maxAlpha=Math.max(maxAlpha,Math.abs(s.alpha));minSpeed=Math.min(minSpeed,s.airspeed);
+  }
+  assert.ok(rotation>=Math.PI*2,`rotation ${rotation*180/Math.PI}°`);
+  assert.ok(maxAlpha<SPEC.stallAngle,`AoA ${maxAlpha*180/Math.PI}°`);
+  assert.ok(minSpeed*3.6>75,`minimum speed ${minSpeed*3.6} km/h`);
+  assert.ok(Math.abs(s.position.y-altitude)<100,`exit altitude ${s.position.y}`);
+});
+test('holding full aft elevator after energy decays still produces an accelerated stall', () => {
+  const s=airborne();s.velocity.set(0,0,-180/3.6);s.controls.pitch=1;
+  let stalled=false;run(s,5,s=>{stalled||=s.stall;});
+  assert.equal(stalled,true);assert.ok(s.airspeed<35);
 });
 test('power-off aircraft cannot gain mechanical energy in still air', () => {
   const s = airborne(); const energy = () => 9.81 * s.position.y + s.velocity.lengthSq() / 2;
@@ -52,7 +102,7 @@ test('lowering nose recovers from an accelerated stall', () => {
   assert.equal(s.stall, false); assert.ok(Math.abs(s.alpha) < SPEC.stallAngle); assert.ok(s.airspeed > 20);
 });
 test('mixture optimum follows altitude and poor mixture reduces RPM', () => {
-  assert.ok(optimalMixture(3000) < optimalMixture(0));
+  assert.equal(optimalMixture(-100),.85);assert.equal(optimalMixture(0),.85);assert.equal(optimalMixture(1000),.575);assert.equal(optimalMixture(2000),.3);assert.equal(optimalMixture(3000),.3);
   const good = new FlightSimulation(), bad = new FlightSimulation();
   for (const s of [good, bad]) { s.controls.ignition = true; s.controls.throttle = 1; }
   bad.controls.mixture = .6; run(good, 20); run(bad, 20); assert.ok(good.rpm > bad.rpm * 1.4);
@@ -62,7 +112,11 @@ test('radiator affects temperature gradually, and overheating damages the engine
   for (const s of [closed, open]) { s.temperature = 100; s.controls.ignition = true; s.controls.throttle = 1; }
   closed.controls.radiator = 0; open.controls.radiator = 1;
   open.step(); assert.ok(Math.abs(open.temperature - 100) < .1);
-  run(closed, 120); run(open, 120); assert.ok(closed.temperature > open.temperature + 15); assert.ok(closed.health < open.health);
+  run(closed, 120); run(open, 120); assert.ok(closed.temperature > open.temperature + 15); assert.ok(open.temperature<110);assert.ok(closed.health < open.health);
+});
+test('gun barrel progresses from cold metal to a bright orange-red glow',()=>{
+  const cold=gunBarrelAppearance(0),warm=gunBarrelAppearance(.6),hot=gunBarrelAppearance(1);
+  assert.deepEqual(cold.emissive,[0,0,0]);assert.ok(warm.emissive[0]>0);assert.ok(hot.emissive[0]>hot.emissive[1]);assert.ok(hot.emissive[1]>hot.emissive[2]);assert.ok(hot.intensity>warm.intensity);
 });
 test('wind changes air-relative speed without changing ground velocity instantly', () => {
   const s = airborne(); s.velocity.set(30, 0, 0); s.windEnabled = true; s.step(); assert.ok(s.airspeed < 30); assert.ok(s.airspeed > 26);
