@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit",
     "dev": "vinext dev",
     "build": "vinext build",
+    "build:itch": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-itch.ps1",
     "start": "wrangler dev --config dist/server/wrangler.json",
     "lint": "oxlint",
     "format": "oxfmt"

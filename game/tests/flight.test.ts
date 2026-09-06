@@ -2,10 +2,16 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Euler, Vector3, PerspectiveCamera, Quaternion } from 'three';
 import { FlightSimulation, DT, SPEC, coefficients, optimalMixture } from '../lib/flight/simulation';
+import { resolveMouseControl } from '../lib/flight/game';
 
 function run(s: FlightSimulation, seconds: number, control?: (s: FlightSimulation) => void) {
   for (let i = 0; i < Math.round(seconds / DT); i++) { control?.(s); s.step(); }
 }
+test('an existing mouse-hand binding wins while the other button is held',()=>{
+  assert.equal(resolveMouseControl('yoke','trigger',true),'trigger');
+  assert.equal(resolveMouseControl('yoke','trigger',false),'yoke');
+  assert.equal(resolveMouseControl('trigger',null,true),'trigger');
+});
 function airborne() { const s = new FlightSimulation(); s.windEnabled = false; s.position.set(0, 500, 0); s.velocity.set(0, 0, -40); s.grounded = false; return s; }
 test('parked aircraft stays on its gear, engine off and full throttle with brake set', () => {
   const s = new FlightSimulation(); run(s, 60); assert.equal(s.position.y, SPEC.groundHeight); assert.ok(s.position.distanceTo(new Vector3(0, SPEC.groundHeight, 330)) < .1);

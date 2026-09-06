@@ -17,8 +17,6 @@
 @media(max-width:760px),(max-height:620px){.sortie-card.map-open{display:block;top:110px;width:210px}}
 
 .hangar-open > :not(.flight-viewport):not(.flight-header) { visibility: hidden; }
-.hangar-menu { left: 24px !important; width: min(390px, calc(100vw - 48px)) !important; transform: translateY(-50%) !important; max-height: 90vh; overflow-y: auto; background: #15241ef2; }
+.hangar-menu { top: 5vh !important; left: 0 !important; right: 0 !important; width: min(390px, calc(100vw - 48px)) !important; margin-inline: auto; --tw-translate-x: 0px !important; --tw-translate-y: 0px !important; transform: none !important; max-height: 90vh; overflow-y: auto; background: #15241ef2; }
 body:has(.hangar-menu) [data-slot="dialog-overlay"] { background: #00000012; backdrop-filter: none; }
 .hangar-menu [data-slot="dialog-close"] { display: none; }
-
-.hangar-menu { translate: 0 -50% !important; transform: none !important; }

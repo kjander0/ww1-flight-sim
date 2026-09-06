@@ -15,7 +15,8 @@ export type FlightInfo={started:boolean;canHangar:boolean;aircraftType:AircraftT
 type Control = 'throttle' | 'mixture' | 'radiator' | 'yoke' | 'ignition' | 'brake' | 'trigger' | 'cocking' | 'bomb';
 type Gauge = { needle: T.Group; max: number; read: () => number };
 type MouseButton=0|2;
-type Drag={name:Control;x:number;y:number;initial:number;pitch:number;roll:number;id:number;grabOffset:T.Vector2;direct:boolean;wheel?:WheelWinder};
+type Drag={name:Control;x:number;y:number;initial:number;pitch:number;roll:number;id?:number;grabOffset:T.Vector2;direct:boolean;wheel?:WheelWinder};
+export function resolveMouseControl<T>(picked:T|null,bound:T|null,chording:boolean){return chording&&bound?bound:picked??bound;}
 export class FlightGame {
   private started=false;
   private previewField:number|null=0;
@@ -79,8 +80,8 @@ export class FlightGame {
     this.prevPosition.copy(this.sim.position); this.prevRotation.copy(this.sim.orientation);
     this.resizeObserver = new ResizeObserver(this.resize); this.resizeObserver.observe(mount); this.resize();
     const canvas = this.renderer.domElement;
-    canvas.addEventListener('pointerdown', this.down); canvas.addEventListener('pointermove', this.move);
-    canvas.addEventListener('pointerup', this.up); canvas.addEventListener('pointercancel', this.up); canvas.addEventListener('lostpointercapture', this.up);canvas.addEventListener('contextmenu',this.contextmenu);
+    canvas.addEventListener('mousedown',this.down);window.addEventListener('mousemove',this.move);window.addEventListener('mouseup',this.up);
+    canvas.addEventListener('pointerdown',this.touchDown);canvas.addEventListener('pointermove',this.touchMove);canvas.addEventListener('pointerup',this.touchUp);canvas.addEventListener('pointercancel',this.touchUp);canvas.addEventListener('lostpointercapture',this.touchUp);canvas.addEventListener('contextmenu',this.contextmenu);
     window.addEventListener('keydown', this.keydown); window.addEventListener('keyup', this.keyup); window.addEventListener('blur', this.blur);
     document.addEventListener('visibilitychange', this.visibility);
     this.registerTools();
@@ -245,7 +246,7 @@ export class FlightGame {
   private hit(name: Control, x: number, y: number, z: number, width: number, height: number) {
     const mesh = new T.Mesh(new T.PlaneGeometry(width, height), new T.MeshBasicMaterial({ visible: false, side: T.DoubleSide })); mesh.position.set(x, y, z); mesh.userData.control = name; this.aircraft.add(mesh); this.hits.push(mesh);
   }
-  private pick(e: PointerEvent): Control | null {
+  private pick(e: MouseEvent): Control | null {
     const r = this.renderer.domElement.getBoundingClientRect(); this.pointer.set((e.clientX - r.left) / r.width * 2 - 1, -(e.clientY - r.top) / r.height * 2 + 1);
     this.ray.setFromCamera(this.pointer, this.camera); return this.ray.intersectObjects(this.hits, false)[0]?.object.userData.control ?? null;
   }
@@ -256,10 +257,10 @@ export class FlightGame {
     return Math.hypot(x,y)<.02?null:Math.atan2(y,x);
   }
   private contextmenu=(e:MouseEvent)=>e.preventDefault();
-  private down = (e: PointerEvent) => {
+  private down = (e: MouseEvent) => {
     if ((e.button!==0&&e.button!==2)||this.paused||this.sim.crashed)return;
     const button=e.button as MouseButton;
-    this.renderer.domElement.focus();this.startAudio();const picked=this.pick(e);if(picked)this.bindings[button]=picked;const name=picked??this.bindings[button];if(!name)return;e.preventDefault();
+    this.renderer.domElement.focus();this.startAudio();const picked=this.pick(e),chording=this.drags.size>0&&!this.drags.has(button),name=resolveMouseControl(picked,this.bindings[button],chording);if(!name)return;if(name===picked)this.bindings[button]=name;e.preventDefault();
     this.placeHand(button,name);
     if (name === 'ignition' || name === 'brake') { this.sim.controls[name] = !this.sim.controls[name]; return; }
     if (name === 'bomb') {this.releaseBomb();return;}
@@ -270,10 +271,10 @@ export class FlightGame {
       grabOffset.x -= e.clientX - rect.left; grabOffset.y -= e.clientY - rect.top;
     }
     const initial = name === 'yoke' || name === 'trigger' || name === 'cocking' ? 0 : this.sim.controls[name];
-    this.drags.set(button,{name,x:e.clientX,y:e.clientY,initial,pitch:this.sim.controls.pitch,roll:this.sim.controls.roll,id:e.pointerId,grabOffset,direct:!!picked,wheel:picked&&(name==='mixture'||name==='radiator')?new WheelWinder(this.wheelAngle(name)):undefined});this.syncTrigger();
-    this.renderer.domElement.setPointerCapture(e.pointerId);
+    const id=e instanceof PointerEvent?e.pointerId:undefined;
+    this.drags.set(button,{name,x:e.clientX,y:e.clientY,initial,pitch:this.sim.controls.pitch,roll:this.sim.controls.roll,id,grabOffset,direct:!!picked,wheel:picked&&(name==='mixture'||name==='radiator')?new WheelWinder(this.wheelAngle(name)):undefined});this.syncTrigger();
   };
-  private move = (e: PointerEvent) => {
+  private move = (e: MouseEvent) => {
     if (this.paused || this.sim.crashed) { this.up(); return; }
     if(this.drags.size){
      for(const d of this.drags.values()){
@@ -292,7 +293,10 @@ export class FlightGame {
     this.renderer.domElement.style.cursor = this.drags.size ? 'grabbing' : this.hover ? 'grab' : 'default';
   };
   private syncTrigger(){this.gun.trigger=[...this.drags.values()].some(d=>d.name==='trigger');}
-  private up = (e?:PointerEvent) => {const finished=e&&(e.button===0||e.button===2)?[this.drags.get(e.button as MouseButton)].filter(Boolean) as Drag[]:[...this.drags.values()];if(e&&(e.button===0||e.button===2))this.drags.delete(e.button as MouseButton);else this.drags.clear();this.syncTrigger();if(!this.drags.size)for(const d of finished)if(this.renderer.domElement.hasPointerCapture(d.id))this.renderer.domElement.releasePointerCapture(d.id);};
+  private up = (e?:MouseEvent) => {const finished=e&&(e.button===0||e.button===2)?[this.drags.get(e.button as MouseButton)].filter(Boolean) as Drag[]:[...this.drags.values()];if(e&&(e.button===0||e.button===2))this.drags.delete(e.button as MouseButton);else this.drags.clear();this.syncTrigger();if(!this.drags.size)for(const d of finished)if(d.id!==undefined&&this.renderer.domElement.hasPointerCapture(d.id))this.renderer.domElement.releasePointerCapture(d.id);};
+  private touchDown=(e:PointerEvent)=>{if(e.pointerType==='mouse')return;this.down(e);if(this.drags.has(0))this.renderer.domElement.setPointerCapture(e.pointerId);};
+  private touchMove=(e:PointerEvent)=>{if(e.pointerType!=='mouse')this.move(e);};
+  private touchUp=(e:PointerEvent)=>{if(e.pointerType!=='mouse')this.up(e);};
   private keydown = (e: KeyboardEvent) => {
     if (this.paused || (e.target instanceof HTMLElement && ['INPUT', 'TEXTAREA', 'BUTTON'].includes(e.target.tagName))) return;
     const k = e.key.toLowerCase(); if (!'wasdicxbrg'.includes(k) || k.length !== 1) return; e.preventDefault(); this.keys.add(k);
@@ -429,7 +433,8 @@ export class FlightGame {
     this.crashEffects.dispose();this.world.dispose();
     this.toolLifecycle.abort();
     cancelAnimationFrame(this.frame); this.resizeObserver.disconnect(); this.blur();
-    const canvas = this.renderer.domElement; canvas.removeEventListener('pointerdown', this.down); canvas.removeEventListener('pointermove', this.move); canvas.removeEventListener('pointerup', this.up); canvas.removeEventListener('pointercancel', this.up); canvas.removeEventListener('lostpointercapture', this.up);canvas.removeEventListener('contextmenu',this.contextmenu);
+    const canvas=this.renderer.domElement;canvas.removeEventListener('mousedown',this.down);window.removeEventListener('mousemove',this.move);window.removeEventListener('mouseup',this.up);
+    canvas.removeEventListener('pointerdown',this.touchDown);canvas.removeEventListener('pointermove',this.touchMove);canvas.removeEventListener('pointerup',this.touchUp);canvas.removeEventListener('pointercancel',this.touchUp);canvas.removeEventListener('lostpointercapture',this.touchUp);canvas.removeEventListener('contextmenu',this.contextmenu);
     window.removeEventListener('keydown', this.keydown); window.removeEventListener('keyup', this.keyup); window.removeEventListener('blur', this.blur); document.removeEventListener('visibilitychange', this.visibility);
     const geometries = new Set<T.BufferGeometry>(), materials = new Set<T.Material>();
     for (const scene of [this.scene, this.cockpit, this.screen]) scene.traverse(o => { if (o instanceof T.Mesh) { geometries.add(o.geometry); for (const m of Array.isArray(o.material) ? o.material : [o.material]) materials.add(m); } });

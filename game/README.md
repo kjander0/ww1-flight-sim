@@ -18,10 +18,23 @@ A browser WW1 free-flight prototype with a generated 10 × 10 km countryside, fo
 
 Requires Node 22.13 or later. Use `npm install`, then `npm run dev`. The terminal prints the local preview address. `npm test` runs headless scenarios, `npm run typecheck` checks TypeScript, and `npm run build` produces the deployment build.
 
+## Package for itch.io
+
+Create a static HTML5 release ZIP from PowerShell with:
+
+```powershell
+npm run build:itch -- --Version 0.1.0
+```
+
+The script writes `releases/super-flight-0.1.0-itch.zip`. The archive has
+`index.html` at its root and uses relative asset paths so it can run from an
+itch.io HTML Game page. The normal development and deployment builds are
+unchanged.
+
 ## Fly
 
 - Initial spawn chooses a random aircraft and Allied airfield. NEW MATCH lets you select any aircraft and any of the four strips; the selected airfield determines your team.
-- Click IGNITION (or I), release BRAKE (or B), and drag the throttle upward. Its grip follows the closest reachable mouse position along the lever arc. Left and right mouse buttons each keep a hand on their last selected control; repeat that button anywhere to use the same control again, or click a different control to move that hand.
+- Click IGNITION (or I), release BRAKE (or B), and drag the throttle upward. Its grip follows the closest reachable mouse position along the lever arc. Left and right mouse buttons each keep a hand on their last selected control; repeat that button anywhere to use the same control again, or click a different control to move that hand. Both buttons can be held together: while one hand is active, the other button keeps its existing binding so you can fly and fire simultaneously.
 - Grab a wheel and circle its centre: clockwise enriches mixture or opens radiator. One and a half turns covers the full range. Start with mixture near 85% and radiator near 50%; radiator opening increases both cooling and drag.
 - At about 85 km/h in the scout, or 95 km/h in the fighter/bomber, drag the yoke downward gently to pull up. About 35% pitch works for the scripted departure.
 - Drag yoke sideways to bank. Controls retain their settings; X centers the yoke. WASD looks around and C recenters. LEVEL shows aircraft pitch/roll independently of head direction.

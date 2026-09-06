@@ -38,6 +38,7 @@ next-env.d.ts
 /.wrangler/
 /outputs/
 /work/
+/releases/
 *.tsbuildinfo
 
 # local deployment archives and operating-system files
