@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as T from 'three';
-import { AMMO_CAPACITY, MachineGun, MUZZLE_VELOCITY, RATE_OF_FIRE } from '../lib/flight/weapons';
+import { AMMO_CAPACITY, gunJamChance, HEAT_COOLING_RATE, HEAT_PER_ROUND, JAM_BASE_CHANCE, JAM_HEAT_CHANCE, MachineGun, MUZZLE_VELOCITY, RATE_OF_FIRE, REAR_AMMO_CAPACITY } from '../lib/flight/weapons';
 
 const state = {
   muzzle: new T.Vector3(0, 100, 0),
@@ -12,6 +12,7 @@ const state = {
 
 void test('gun must be cocked and fires at its cyclic rate while held', () => {
   assert.equal(MUZZLE_VELOCITY, 620);
+  assert.equal(RATE_OF_FIRE*60,600);
   const gun = new MachineGun(() => .5);
   gun.trigger = true;
   gun.step(1, state);
@@ -23,6 +24,8 @@ void test('gun must be cocked and fires at its cyclic rate while held', () => {
   assert.ok(gun.projectiles[0].velocity.z < -450);
   assert.equal(gun.projectiles[0].tracer, true);
   assert.equal(gun.projectiles[1].tracer, false);
+  assert.equal(gun.projectiles[2].tracer, false);
+  assert.equal(gun.projectiles[3].tracer, true);
 });
 
 void test('heat increases dispersion and jams require cocking again', () => {
@@ -36,6 +39,19 @@ void test('heat increases dispersion and jams require cocking again', () => {
   gun.cock();
   assert.equal(gun.jammed, false);
   assert.equal(gun.cocked, true);
+});
+
+void test('jam odds are tripled across the heat range',()=>{
+  assert.equal(JAM_BASE_CHANCE,.00075);assert.equal(JAM_HEAT_CHANCE,.069);
+  assert.equal(gunJamChance(0),.00075);
+  assert.ok(Math.abs(gunJamChance(1)-.06975)<1e-12);
+  assert.ok(Math.abs(gunJamChance(.5)-.009375)<1e-12);
+});
+
+void test('gun heat builds and cools at the doubled rates',()=>{
+  assert.equal(HEAT_PER_ROUND,.034);assert.equal(HEAT_COOLING_RATE,.052);
+  const gun=new MachineGun(()=>.5);gun.cock();gun.trigger=true;gun.step(.1,state);assert.ok(Math.abs(gun.heat-HEAT_PER_ROUND)<1e-12);
+  gun.trigger=false;gun.heat=1;gun.step(1,state);assert.ok(Math.abs(gun.heat-(1-HEAT_COOLING_RATE))<1e-12);
 });
 
 void test('projectiles inherit aircraft motion, fall, slow, and stop at terrain', () => {
@@ -52,8 +68,9 @@ void test('projectiles inherit aircraft motion, fall, slow, and stop at terrain'
   assert.equal(gun.impacts.length, 0);
 });
 
-void test('gun has a 250-round belt and cannot fire beyond it', () => {
-  assert.equal(AMMO_CAPACITY, 250);
+void test('forward guns have 100-round belts while rear guns retain 250 rounds', () => {
+  assert.equal(AMMO_CAPACITY, 100);
+  assert.equal(REAR_AMMO_CAPACITY,250);
   const gun = new MachineGun(() => .5); gun.cock(); gun.trigger = true;
   gun.roundsRemaining = 2;
   gun.step(1, state);
@@ -63,4 +80,5 @@ void test('gun has a 250-round belt and cannot fire beyond it', () => {
   assert.equal(gun.roundsFired, 2);
   gun.reset();
   assert.equal(gun.roundsRemaining, AMMO_CAPACITY);
+  const rear=new MachineGun(()=>.5,MUZZLE_VELOCITY,REAR_AMMO_CAPACITY);rear.roundsRemaining=1;rear.reset();assert.equal(rear.roundsRemaining,REAR_AMMO_CAPACITY);
 });

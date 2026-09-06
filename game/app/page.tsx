@@ -351,7 +351,9 @@ export default function Home() {
               the ring and bead, then hold the trigger. Bullets inherit aircraft
               velocity and are affected by drag and gravity. Sustained fire heats
               the gun, spreading shots and causing jams; let it cool and recock
-              after a stoppage. Each belt contains 250 rounds.
+              after a stoppage. Forward-gun belts contain 100 rounds. The fighter
+              has two independently aimed, cocked, and fired guns; use both mouse
+              buttons to operate both triggers together.
             </dd>
             <dt>Bomber</dt>
             <dd>
@@ -370,8 +372,8 @@ export default function Home() {
             </dd>
             <dt>Combat, AI & navigation</dt>
             <dd>
-              MAP shows you, contacts, and all four airfields. Three allied and
-              four enemy AI pilots taxi, take off, dogfight, bomb, and return as
+              MAP shows you, contacts, and all four airfields. Four allied and
+              five enemy AI pilots taxi, take off, dogfight, bomb, and return as
               replacements after losses. There is no score or finishing state:
               air activity and damage continue until the page is refreshed. Enter
               the hangar to change aircraft, airfield, or side. Leaving a live

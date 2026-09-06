@@ -6,13 +6,13 @@ import { AIRFIELDS, Terrain } from './terrain';
 import { WorldView } from './world';
 import { CrashEffects } from './crash';
 import { horizonMaterial, readAttitude } from './attitude';
-import { AMMO_CAPACITY, MachineGun } from './weapons';
+import { MachineGun } from './weapons';
 import { Battle, type BattleInfo, rackPosition } from './battle';
 import { BattleView, bombModel } from './battle-view';
 import { parkingPosition, stoppedRunway, turnHeadYaw } from './airfield-ops';
 export type FlightInfo={started:boolean;flightId:string;canHangar:boolean;aircraftType:AircraftType;airfieldIndex:number;x:number;z:number;heading:number;altitude:number;altitudeAboveGround:number;rollRadians:number;rollControl:number;loopRotation:number;betweenTrees:boolean;grounded:boolean;crashed:boolean;battle:BattleInfo};
 
-type Control = 'throttle' | 'mixture' | 'radiator' | 'yoke' | 'ignition' | 'brake' | 'trigger' | 'cocking' | 'bomb';
+type Control = 'throttle' | 'mixture' | 'radiator' | 'yoke' | 'ignition' | 'brake' | 'trigger' | 'cocking' | 'leftTrigger' | 'leftCocking' | 'bomb';
 type Gauge = { needle: T.Group; max: number; read: () => number };
 type MouseButton=0|2;
 type Drag={name:Control;x:number;y:number;initial:number;pitch:number;roll:number;id?:number;grabOffset:T.Vector2;direct:boolean;wheel?:WheelWinder};
@@ -25,6 +25,7 @@ export function resolveMouseControl<T>(picked:T|null,bound:T|null,chording:boole
 export function movePilotLateral(current:number,input:number,dt:number){return clamp(current+input*dt*.48,-.38,.38);}
 export function bombButtonAction(coverOpen:boolean):'open'|'release'{return coverOpen?'release':'open';}
 export function explosionLevel(distance:number){return clamp(1-distance/2000,0,1);}
+export function cockingJamKick(strength:number){const s=clamp(strength,0,1);return Math.sin((1-s)*45)*s;}
 export function gunBarrelAppearance(heat:number){
   const glow=clamp((heat-.2)/.8,0,1),orange=glow*glow;
   return {color:[.106+glow*.894,.141+glow*.18,.125-glow*.095] as const,emissive:[glow,.08*glow+.32*orange,.01*glow] as const,intensity:.2+glow*1.8};
@@ -70,7 +71,9 @@ export class FlightGame {
   private propeller = new T.Group(); private resizeObserver: ResizeObserver;
   private labels: T.Texture[] = []; private fps = 60;
   readonly gun = new MachineGun();
-  private gunTrigger = new T.Group(); private cockingHandle = new T.Group(); private gunBarrelMaterial:T.MeshStandardMaterial|null=null;private cockTravel = 0;private cockRatchet=0; private gunRecoil = 0; private shownRounds = 0;private shownAmmo=-1;private ammoTexture:T.CanvasTexture|null=null;private bombCover=new T.Group();private bombCoverOpen=false;private bombHand:MouseButton|null=null;private heardBlasts=new Set<number>();
+  readonly secondaryGun = new MachineGun();
+  private gunTrigger = new T.Group(); private cockingHandle = new T.Group(); private gunBarrelMaterial:T.MeshStandardMaterial|null=null;private cockTravel = 0;private cockRatchet=0; private gunRecoil = 0; private shownRounds = 0;private gunWasJammed=false;private gunJamShake=0;private shownAmmo=-1;private ammoTexture:T.CanvasTexture|null=null;private bombCover=new T.Group();private bombCoverOpen=false;private bombHand:MouseButton|null=null;private heardBlasts=new Set<number>();
+  private leftGunTrigger=new T.Group();private leftCockingHandle=new T.Group();private leftGunBarrelMaterial:T.MeshStandardMaterial|null=null;private leftCockTravel=0;private leftCockRatchet=0;private leftGunRecoil=0;private leftShownRounds=0;private leftGunWasJammed=false;private leftGunJamShake=0;private leftShownAmmo=-1;private leftAmmoTexture:T.CanvasTexture|null=null;
   private tracerGeometry = new T.BoxGeometry(1, 1, 1); private tracers: T.InstancedMesh;
   private toolLifecycle = new AbortController();
   private audio: AudioContext | null = null; private oscillators: OscillatorNode[] = []; private gain: GainNode | null = null; private engineNoise: AudioBufferSourceNode | null=null;private noiseGain:GainNode|null=null;private noiseBuffer:AudioBuffer|null=null;private blastNoiseBuffer:AudioBuffer|null=null;
@@ -95,7 +98,7 @@ export class FlightGame {
     this.sim.groundHeightAt=this.terrain.heightAt;this.sim.isWaterAt=(x,z)=>this.terrain.isWater(x,z);
     this.setSpawn();this.sim.reset();
     this.world=new WorldView(this.scene,this.terrain,this.sim.scenery);
-    this.battle=new Battle(this.terrain,this.sim,this.gun,AIRFIELDS[this.airfieldIndex].team,Math.random,this.sim.scenery);this.battleView=new BattleView(this.scene,this.battle);
+    this.battle=new Battle(this.terrain,this.sim,this.gun,AIRFIELDS[this.airfieldIndex].team,Math.random,this.sim.scenery,this.secondaryGun);this.battleView=new BattleView(this.scene,this.battle);
     this.crashEffects=new CrashEffects(this.scene,this.terrain.heightAt);
     this.buildAircraft(); this.cockpit.add(this.aircraft);
     this.prevPosition.copy(this.sim.position); this.prevRotation.copy(this.sim.orientation);
@@ -202,6 +205,7 @@ export class FlightGame {
     else {const spinner=new T.Group();spinner.position.set(0,0,-3.52);this.propeller.add(spinner);this.box(spinner,[.13,1.8,.08],[0,0,0],timber);}
     this.aircraft.add(this.propeller);
     this.buildGun(dark, brass, timber);
+    if(this.sim.aircraftType==='fighter')this.buildGun(dark,brass,timber,true);
     if(spec.bombs>0){this.label('BOMB RELEASE',-.48,-.46,-.32,.30);
     const release=new T.Group();release.position.set(-.48,-.51,-.27);this.box(release,[.12,.065,.045],[0,0,0],this.material('#ad5d34'));this.aircraft.add(release);this.knobs.bomb=release;this.hit('bomb',-.48,-.51,-.23,.22,.11);
     this.bombCover=new T.Group();this.bombCover.position.set(-.48,-.44,-.235);this.box(this.bombCover,[.17,.14,.028],[0,-.07,0],this.material('#586057'));this.rod(this.bombCover,[-.1,0,0],[.1,0,0],.014,brass);this.aircraft.add(this.bombCover);}
@@ -213,13 +217,14 @@ export class FlightGame {
     const anchor=new T.Group();
     const positions:Partial<Record<Control,[number,number,number]>>={
       throttle:[0,.18,.07],mixture:[0,0,.07],radiator:[0,0,.07],yoke:[0,.17,.08],ignition:[0,0,.07],brake:[0,0,.07],
-      trigger:[0,-.04,.04],cocking:[.16,0,.04],bomb:[0,0,.07]
+      trigger:[0,-.04,.04],cocking:[.16,0,.04],leftTrigger:[0,-.04,.04],leftCocking:[-.16,0,.04],bomb:[0,0,.07]
     };
     anchor.position.set(...(positions[control]??[0,0,.07]));parent.add(anchor);this.handAnchors[control]=anchor;
   }
   private buildHands(){
     this.handAnchors={};
     for(const control of ['throttle','mixture','radiator','yoke','ignition','brake','trigger','cocking'] as Control[])this.handAnchor(control);
+    if(this.knobs.leftTrigger){this.handAnchor('leftTrigger');this.handAnchor('leftCocking');}
     if(this.knobs.bomb)this.handAnchor('bomb');
     const skin=this.material('#b98561'),cuff=this.material('#6e7967');
     for(const button of [0,2] as MouseButton[]){
@@ -234,32 +239,40 @@ export class FlightGame {
     const anchor=this.handAnchors[control],hand=this.hands[button];if(!anchor)return;
     anchor.add(hand);hand.position.set(button===0?-.045:.045,0,.035);hand.rotation.set(0,0,button===0?-.12:.12);hand.visible=true;
   }
-  private buildGun(dark: T.Material, brass: T.Material, timber: T.Material) {
-    const gun = new T.Group(); gun.position.set(.34, .48, -.55); this.aircraft.add(gun);
+  private buildGun(dark: T.Material, brass: T.Material, timber: T.Material,left=false) {
+    const side=left?-1:1,weapon=left?this.secondaryGun:this.gun;
+    const gun = new T.Group(); gun.position.set(.34*side, .48, -.55); this.aircraft.add(gun);
     this.box(gun, [.19, .19, .72], [0, 0, -.2], dark);
-    this.gunBarrelMaterial=new T.MeshStandardMaterial({color:'#1b2420',emissive:'#000000',roughness:.62,metalness:.55,flatShading:true});
-    const jacket = new T.Mesh(new T.CylinderGeometry(.062, .062, 2.25, 10), this.gunBarrelMaterial); jacket.rotation.x = Math.PI / 2; jacket.position.set(0, .025, -1.66); gun.add(jacket);
-    for (let z = -.72; z > -2.65; z -= .18) { const ring = new T.Mesh(new T.TorusGeometry(.066, .009, 5, 10), this.gunBarrelMaterial); ring.position.set(0, .025, z); gun.add(ring); }
-    this.rod(gun, [0, .025, -2.75], [0, .025, -3.05], .028, this.gunBarrelMaterial);
+    const barrelMaterial=new T.MeshStandardMaterial({color:'#1b2420',emissive:'#000000',roughness:.62,metalness:.55,flatShading:true});
+    if(left)this.leftGunBarrelMaterial=barrelMaterial;else this.gunBarrelMaterial=barrelMaterial;
+    const jacket = new T.Mesh(new T.CylinderGeometry(.062, .062, 2.25, 10), barrelMaterial); jacket.rotation.x = Math.PI / 2; jacket.position.set(0, .025, -1.66); gun.add(jacket);
+    for (let z = -.72; z > -2.65; z -= .18) { const ring = new T.Mesh(new T.TorusGeometry(.066, .009, 5, 10), barrelMaterial); ring.position.set(0, .025, z); gun.add(ring); }
+    this.rod(gun, [0, .025, -2.75], [0, .025, -3.05], .028, barrelMaterial);
     // Ring-and-bead sight: both are on the true bore line, so gravity and lead still matter.
     const rearSight = new T.Mesh(new T.TorusGeometry(.085, .009, 7, 24), brass); rearSight.position.set(0, .22, .08); gun.add(rearSight);
     this.rod(gun, [0, .135, .08], [0, .22, .08], .007, brass);
     this.rod(gun, [0, .065, -2.83], [0, .22, -2.83], .008, brass);
     const bead = new T.Mesh(new T.SphereGeometry(.018, 8, 6), brass); bead.position.set(0, .22, -2.83); gun.add(bead);
     this.box(gun,[.22,.09,.025],[0,.02,.18],dark);
-    this.ammoTexture=this.texture(160,64,c=>this.paintAmmo(c));const counter=new T.Mesh(new T.PlaneGeometry(.19,.072),new T.MeshBasicMaterial({map:this.ammoTexture}));counter.position.set(0,.02,.195);gun.add(counter);this.shownAmmo=this.gun.roundsRemaining;
-    this.gunTrigger = new T.Group(); this.gunTrigger.position.set(-.13, -.08, .12); gun.add(this.gunTrigger);
-    this.rod(this.gunTrigger, [0, .05, 0], [0, -.08, .02], .014, brass);
-    const guard = new T.Mesh(new T.TorusGeometry(.075, .009, 5, 14, Math.PI), dark); guard.rotation.z = Math.PI / 2; guard.position.set(-.01, -.02, .015); this.gunTrigger.add(guard);
-    this.cockingHandle = new T.Group(); this.cockingHandle.position.set(.14, .08, -.08); gun.add(this.cockingHandle);
-    this.rod(this.cockingHandle, [0, 0, 0], [.12, 0, 0], .018, brass);
-    const grip = new T.Mesh(new T.CylinderGeometry(.032, .032, .15, 8), timber); grip.rotation.z = Math.PI / 2; grip.position.x = .16; this.cockingHandle.add(grip);
-    this.knobs.trigger=this.gunTrigger;this.knobs.cocking=this.cockingHandle;
-    this.hit('trigger', .20, .37, -.34, .24, .25);
-    this.hit('cocking', .55, .58, -.55, .26, .25);
+    const ammoTexture=this.texture(160,64,c=>this.paintAmmo(c,weapon));const counter=new T.Mesh(new T.PlaneGeometry(.19,.072),new T.MeshBasicMaterial({map:ammoTexture}));counter.position.set(0,.02,.195);gun.add(counter);
+    const trigger = new T.Group(); trigger.position.set(-.13*side, -.08, .12); gun.add(trigger);
+    this.rod(trigger, [0, .05, 0], [0, -.08, .02], .014, brass);
+    const guard = new T.Mesh(new T.TorusGeometry(.075, .009, 5, 14, Math.PI), dark); guard.rotation.z = Math.PI / 2; guard.position.set(-.01*side, -.02, .015); trigger.add(guard);
+    const cocking = new T.Group(); cocking.position.set(.14*side, .08, -.08); gun.add(cocking);
+    this.rod(cocking, [0, 0, 0], [.12*side, 0, 0], .018, brass);
+    const grip = new T.Mesh(new T.CylinderGeometry(.032, .032, .15, 8), timber); grip.rotation.z = Math.PI / 2; grip.position.x = .16*side; cocking.add(grip);
+    const triggerControl:Control=left?'leftTrigger':'trigger',cockingControl:Control=left?'leftCocking':'cocking';
+    this.knobs[triggerControl]=trigger;this.knobs[cockingControl]=cocking;
+    this.hit(triggerControl, .20*side, .37, -.34, .24, .25);
+    this.hit(cockingControl, .55*side, .58, -.55, .26, .25);
+    if(left){this.leftGunTrigger=trigger;this.leftCockingHandle=cocking;this.leftAmmoTexture=ammoTexture;this.leftShownAmmo=weapon.roundsRemaining;}
+    else {this.gunTrigger=trigger;this.cockingHandle=cocking;this.ammoTexture=ammoTexture;this.shownAmmo=weapon.roundsRemaining;}
   }
-  private paintAmmo(c:CanvasRenderingContext2D){c.fillStyle='#111715';c.fillRect(0,0,160,64);c.strokeStyle='#8f8058';c.lineWidth=4;c.strokeRect(2,2,156,60);c.textAlign='center';c.fillStyle='#aaa181';c.font='bold 12px monospace';c.fillText('ROUNDS',80,16);c.fillStyle=this.gun.roundsRemaining<50?'#ef8665':'#ead58e';c.font='bold 35px monospace';c.fillText(String(this.gun.roundsRemaining).padStart(3,'0'),80,52);}
-  private updateAmmoDisplay(){if(!this.ammoTexture||this.shownAmmo===this.gun.roundsRemaining)return;this.shownAmmo=this.gun.roundsRemaining;this.paintAmmo((this.ammoTexture.image as HTMLCanvasElement).getContext('2d')!);this.ammoTexture.needsUpdate=true;}
+  private paintAmmo(c:CanvasRenderingContext2D,gun:MachineGun){c.fillStyle='#111715';c.fillRect(0,0,160,64);c.strokeStyle='#8f8058';c.lineWidth=4;c.strokeRect(2,2,156,60);c.textAlign='center';c.fillStyle='#aaa181';c.font='bold 12px monospace';c.fillText('ROUNDS',80,16);c.fillStyle=gun.roundsRemaining<25?'#ef8665':'#ead58e';c.font='bold 35px monospace';c.fillText(String(gun.roundsRemaining).padStart(3,'0'),80,52);}
+  private updateAmmoDisplay(){
+    if(this.ammoTexture&&this.shownAmmo!==this.gun.roundsRemaining){this.shownAmmo=this.gun.roundsRemaining;this.paintAmmo((this.ammoTexture.image as HTMLCanvasElement).getContext('2d')!,this.gun);this.ammoTexture.needsUpdate=true;}
+    if(this.leftAmmoTexture&&this.leftShownAmmo!==this.secondaryGun.roundsRemaining){this.leftShownAmmo=this.secondaryGun.roundsRemaining;this.paintAmmo((this.leftAmmoTexture.image as HTMLCanvasElement).getContext('2d')!,this.secondaryGun);this.leftAmmoTexture.needsUpdate=true;}
+  }
   private gauge(name: string, unit: string, max: number, read: () => number, x: number, y: number, z: number) {
     const radius = .134;
     const map = this.texture(256, 256, c => {
@@ -293,7 +306,7 @@ export class FlightGame {
   private down = (e: MouseEvent) => {
     if ((e.button!==0&&e.button!==2)||this.paused||this.sim.crashed)return;
     const button=e.button as MouseButton;
-    this.renderer.domElement.focus();this.startAudio();const picked=this.pick(e),chording=this.drags.size>0&&!this.drags.has(button),name=resolveMouseControl(picked,this.bindings[button],chording);if(!name)return;if(name===picked)this.bindings[button]=name;e.preventDefault();if(this.bombHand===button&&name!=='bomb'){this.bombCoverOpen=false;this.bombHand=null;}if(name==='cocking'){this.cockRatchet=0;this.playRatchet(0);}else this.playClick(name==='trigger'?'trigger':'light');
+    this.renderer.domElement.focus();this.startAudio();const picked=this.pick(e),chording=this.drags.size>0&&!this.drags.has(button),name=resolveMouseControl(picked,this.bindings[button],chording);if(!name)return;if(name===picked)this.bindings[button]=name;e.preventDefault();if(this.bombHand===button&&name!=='bomb'){this.bombCoverOpen=false;this.bombHand=null;}if(name==='cocking'||name==='leftCocking'){if(name==='leftCocking')this.leftCockRatchet=0;else this.cockRatchet=0;this.playRatchet(0);}else this.playClick(name==='trigger'||name==='leftTrigger'?'trigger':'light');
     this.placeHand(button,name);
     if (name === 'ignition' || name === 'brake') { this.sim.controls[name] = !this.sim.controls[name]; return; }
     if (name === 'bomb') {this.bombHand=button;if(bombButtonAction(this.bombCoverOpen)==='open'){this.bombCoverOpen=true;return;}this.releaseBomb(false);return;}
@@ -303,7 +316,7 @@ export class FlightGame {
       projectThrottleGrip(this.sim.controls.throttle, this.aircraft.matrixWorld, this.camera, rect.width, rect.height, grabOffset);
       grabOffset.x -= e.clientX - rect.left; grabOffset.y -= e.clientY - rect.top;
     }
-    const initial = name === 'yoke' || name === 'trigger' || name === 'cocking' ? 0 : this.sim.controls[name];
+    const initial = name === 'yoke' || name === 'trigger' || name === 'cocking' || name==='leftTrigger' || name==='leftCocking' ? 0 : this.sim.controls[name];
     const id=e instanceof PointerEvent?e.pointerId:undefined;
     this.drags.set(button,{name,x:e.clientX,y:e.clientY,initial,pitch:this.sim.controls.pitch,roll:this.sim.controls.roll,id,grabOffset,direct:!!picked,wheel:picked&&(name==='mixture'||name==='radiator')?new WheelWinder(this.wheelAngle(name)):undefined});this.syncTrigger();
   };
@@ -320,12 +333,12 @@ export class FlightGame {
       } else if(d.name==='throttle')this.sim.controls.throttle=clamp(d.initial-(e.clientY-d.y)/scale,0,1);
       else if ((d.name === 'mixture' || d.name === 'radiator')&&d.wheel) {this.pick(e);this.sim.controls[d.name]=d.wheel.update(this.wheelAngle(d.name),this.sim.controls[d.name]);}
       else if(d.name==='mixture'||d.name==='radiator')this.sim.controls[d.name]=clamp(d.initial-(e.clientY-d.y)/scale,0,1);
-      else if (d.name === 'cocking') { const was=this.cockTravel;this.cockTravel = clamp((e.clientY - d.y) / Math.max(65, this.mount.clientHeight * .12), 0, 1);const tooth=Math.floor(this.cockTravel*7);if(tooth!==this.cockRatchet&&this.cockTravel<.92){this.cockRatchet=tooth;this.playRatchet(tooth);}if(this.cockTravel >= .92){this.gun.cock();if(was<.92)this.playCocking();} }
+      else if (d.name === 'cocking'||d.name==='leftCocking') {const left=d.name==='leftCocking',was=left?this.leftCockTravel:this.cockTravel,travel=clamp((e.clientY-d.y)/Math.max(65,this.mount.clientHeight*.12),0,1),tooth=Math.floor(travel*7),ratchet=left?this.leftCockRatchet:this.cockRatchet;if(left)this.leftCockTravel=travel;else this.cockTravel=travel;if(tooth!==ratchet&&travel<.92){if(left)this.leftCockRatchet=tooth;else this.cockRatchet=tooth;this.playRatchet(tooth);}if(travel>=.92){(left?this.secondaryGun:this.gun).cock();if(was<.92)this.playCocking();} }
      }
     } else this.hover = this.pick(e);
     this.renderer.domElement.style.cursor = this.drags.size ? 'grabbing' : this.hover ? 'grab' : 'default';
   };
-  private syncTrigger(){this.gun.trigger=[...this.drags.values()].some(d=>d.name==='trigger');}
+  private syncTrigger(){this.gun.trigger=[...this.drags.values()].some(d=>d.name==='trigger');this.secondaryGun.trigger=[...this.drags.values()].some(d=>d.name==='leftTrigger');}
   private up = (e?:MouseEvent) => {const finished=e&&(e.button===0||e.button===2)?[this.drags.get(e.button as MouseButton)].filter(Boolean) as Drag[]:[...this.drags.values()];if(e&&(e.button===0||e.button===2))this.drags.delete(e.button as MouseButton);else this.drags.clear();this.syncTrigger();if(!this.drags.size)for(const d of finished)if(d.id!==undefined&&this.renderer.domElement.hasPointerCapture(d.id))this.renderer.domElement.releasePointerCapture(d.id);};
   private touchDown=(e:PointerEvent)=>{if(e.pointerType==='mouse')return;this.down(e);if(this.drags.has(0))this.renderer.domElement.setPointerCapture(e.pointerId);};
   private touchMove=(e:PointerEvent)=>{if(e.pointerType!=='mouse')this.move(e);};
@@ -344,12 +357,12 @@ export class FlightGame {
     if(!this.started)return false;const runway=stoppedRunway(this.sim),safe=runway>=0;
     if(!safe)this.battle.retirePlayer();this.blur();return !safe;
   }
-  private resetView() { this.crashEffects.reset();this.aircraft.visible=true;this.propeller.visible=true;this.cockTravel=0;this.cockRatchet=0;this.gunRecoil=0;this.shownRounds=0;this.bombCoverOpen=false;this.bombHand=null;this.heardBlasts.clear(); this.prevPosition.copy(this.sim.position); this.prevRotation.copy(this.sim.orientation); this.yaw = 0; this.pitch = -.23;this.pilotLateral=0;this.loopRotation=0; this.accumulator = 0; this.blur();this.hover=null; }
+  private resetView() { this.crashEffects.reset();this.aircraft.visible=true;this.propeller.visible=true;this.cockTravel=0;this.cockRatchet=0;this.gunRecoil=0;this.shownRounds=0;this.gunWasJammed=false;this.gunJamShake=0;this.leftCockTravel=0;this.leftCockRatchet=0;this.leftGunRecoil=0;this.leftShownRounds=0;this.leftGunWasJammed=false;this.leftGunJamShake=0;this.bombCoverOpen=false;this.bombHand=null;this.heardBlasts.clear(); this.prevPosition.copy(this.sim.position); this.prevRotation.copy(this.sim.orientation); this.yaw = 0; this.pitch = -.23;this.pilotLateral=0;this.loopRotation=0; this.accumulator = 0; this.blur();this.hover=null; }
   startSortie(type:AircraftType,airfieldIndex:number){
     if(!(type in AIRCRAFT)||!Number.isInteger(airfieldIndex)||airfieldIndex<0||airfieldIndex>=AIRFIELDS.length)throw new Error('Invalid aircraft or airfield');
     const parking=parkingPosition(this.terrain,airfieldIndex);
     if(this.battle.planes.slice(1).some(p=>!p.sim.crashed&&p.sim.position.distanceTo(parking)<24)){this.battle.message='PARKING OCCUPIED · CHOOSE OTHER AIRFIELD';return false;}
-    this.crashEffects.reset();this.releaseAircraft();this.sim.aircraftType=type;this.airfieldIndex=airfieldIndex;this.setSpawn();this.sim.reset();this.gun.reset();this.resetView();this.buildAircraft();
+    this.crashEffects.reset();this.releaseAircraft();this.sim.aircraftType=type;this.airfieldIndex=airfieldIndex;this.setSpawn();this.sim.reset();this.gun.reset();this.secondaryGun.reset();this.resetView();this.buildAircraft();
     this.battle.setPlayerTeam(AIRFIELDS[airfieldIndex].team);
     const p=this.battle.planes[0];p.homeField=airfieldIndex;p.rear.reset();p.cooldown=0;p.respawnQueued=false;p.generation++;p.previous.copy(this.sim.position);p.rotation.copy(this.sim.orientation);
     this.flightId=`${this.worldId}:${++this.sortieNumber}`;
@@ -357,7 +370,7 @@ export class FlightGame {
   }
   private releaseAircraft(){
     const geometries=new Set<T.BufferGeometry>(),materials=new Set<T.Material>();this.aircraft.traverse(o=>{if(o instanceof T.Mesh){geometries.add(o.geometry);for(const m of Array.isArray(o.material)?o.material:[o.material])materials.add(m);}});
-    geometries.forEach(g=>g.dispose());materials.forEach(m=>m.dispose());this.labels.forEach(t=>t.dispose());this.labels=[];this.aircraft.clear();this.gauges=[];this.hits=[];this.knobs={};this.bombRacks.length=0;this.propeller=new T.Group();this.gunTrigger=new T.Group();this.cockingHandle=new T.Group();this.gunBarrelMaterial=null;this.bombCover=new T.Group();this.attitude=null;this.ammoTexture=null;this.shownAmmo=-1;
+    geometries.forEach(g=>g.dispose());materials.forEach(m=>m.dispose());this.labels.forEach(t=>t.dispose());this.labels=[];this.aircraft.clear();this.gauges=[];this.hits=[];this.knobs={};this.bombRacks.length=0;this.propeller=new T.Group();this.gunTrigger=new T.Group();this.cockingHandle=new T.Group();this.gunBarrelMaterial=null;this.leftGunTrigger=new T.Group();this.leftCockingHandle=new T.Group();this.leftGunBarrelMaterial=null;this.bombCover=new T.Group();this.attitude=null;this.ammoTexture=null;this.shownAmmo=-1;this.leftAmmoTexture=null;this.leftShownAmmo=-1;
   }
   private startAudio() {
     if (!this.audio) {
@@ -387,6 +400,11 @@ export class FlightGame {
   }
   private playGunshot(heat:number){
     if(!this.audio||!this.noiseBuffer)return;const now=this.audio.currentTime,source=this.audio.createBufferSource(),filter=this.audio.createBiquadFilter(),gain=this.audio.createGain(),body=this.audio.createOscillator(),bodyGain=this.audio.createGain(),crack=this.audio.createOscillator(),crackGain=this.audio.createGain();source.buffer=this.noiseBuffer;source.playbackRate.value=.82-heat*.22+Math.random()*.08;filter.type='bandpass';filter.frequency.value=880-heat*390;filter.Q.value=.72;gain.gain.setValueAtTime(.34+heat*.06,now);gain.gain.exponentialRampToValueAtTime(.0001,now+.085+heat*.05);source.connect(filter);filter.connect(gain);gain.connect(this.audio.destination);body.type=heat>.65?'sawtooth':'square';body.frequency.setValueAtTime(105-heat*34+Math.random()*10,now);body.frequency.exponentialRampToValueAtTime(42,now+.065);bodyGain.gain.setValueAtTime(.2,now);bodyGain.gain.exponentialRampToValueAtTime(.0001,now+.075);body.connect(bodyGain);bodyGain.connect(this.audio.destination);crack.type='triangle';crack.frequency.setValueAtTime(1450-heat*420,now);crack.frequency.exponentialRampToValueAtTime(520,now+.022);crackGain.gain.setValueAtTime(.15,now);crackGain.gain.exponentialRampToValueAtTime(.0001,now+.03);crack.connect(crackGain);crackGain.connect(this.audio.destination);source.start(now,Math.random());source.stop(now+.15);body.start(now);body.stop(now+.08);crack.start(now);crack.stop(now+.035);
+  }
+  private playGunJam(){
+    if(!this.audio||!this.noiseBuffer)return;const now=this.audio.currentTime;
+    // Three uneven steel-on-steel impacts make the stoppage unmistakable from a normal trigger click.
+    for(const [delay,frequency,volume]of[[0,2400,.34],[.031,1350,.3],[.083,760,.27]] as const){this.mechanicalNoise(now+delay,.055,frequency,3.8,volume,'highpass');const tooth=this.audio.createOscillator(),gain=this.audio.createGain();tooth.type='square';tooth.frequency.setValueAtTime(frequency*.42,now+delay);tooth.frequency.exponentialRampToValueAtTime(72,now+delay+.045);gain.gain.setValueAtTime(volume*.5,now+delay);gain.gain.exponentialRampToValueAtTime(.0001,now+delay+.055);tooth.connect(gain);gain.connect(this.audio.destination);tooth.start(now+delay);tooth.stop(now+delay+.06);}
   }
   private playExplosion(distance:number){
     if(!this.audio||!this.blastNoiseBuffer)return;const level=explosionLevel(distance);if(level<=0)return;const now=this.audio.currentTime,bus=this.audio.createGain(),delay=this.audio.createDelay(1),feedback=this.audio.createGain();bus.gain.value=level;delay.delayTime.value=.29+Math.min(.16,distance/9000);feedback.gain.value=.27;bus.connect(this.audio.destination);bus.connect(delay);delay.connect(this.audio.destination);delay.connect(feedback);feedback.connect(delay);
@@ -418,7 +436,7 @@ export class FlightGame {
   private updateTracers() {
     const center = new T.Vector3(), direction = new T.Vector3(), rotation = new T.Quaternion(), scale = new T.Vector3(), matrix = new T.Matrix4();
     let n = 0;
-    for (const p of this.battle.planes.flatMap(p=>[...p.gun.projectiles,...p.rear.projectiles])) {
+    for (const p of this.battle.planes.flatMap(p=>[...p.gun.projectiles,...(p.sim.aircraftType==='fighter'?p.secondary.projectiles:[]),...p.rear.projectiles])) {
       if (!p.tracer || n >= 128) continue;
       direction.copy(p.velocity).normalize();
       // Grow the streak from the muzzle; never draw a tail farther back than
@@ -487,13 +505,23 @@ export class FlightGame {
     this.knobs.ignition!.position.z = c.ignition ? -.47 : -.44;
     const brakePose=brakeButtonPose(c.brake,this.sim.rpm,now);this.knobs.brake!.position.set(brakePose.x,brakePose.y,brakePose.z);this.knobs.brake!.rotation.z=brakePose.rotation;
     this.cockTravel = [...this.drags.values()].some(d=>d.name==='cocking') ? this.cockTravel : Math.max(0, this.cockTravel - elapsed * 5);
-    const needsCock=this.gun.trigger&&(!this.gun.cocked||this.gun.jammed),shake=needsCock?Math.sin(now*.075)*.014:0;this.cockingHandle.position.set(.14+shake,.08+(needsCock?Math.cos(now*.11)*.009:0),-.08+this.cockTravel*.28);this.cockingHandle.rotation.z=needsCock?Math.sin(now*.13)*.09:0;
+    this.leftCockTravel=[...this.drags.values()].some(d=>d.name==='leftCocking')?this.leftCockTravel:Math.max(0,this.leftCockTravel-elapsed*5);
+    if(this.gun.jammed&&!this.gunWasJammed){this.gunJamShake=1;this.playGunJam();}
+    if(this.secondaryGun.jammed&&!this.leftGunWasJammed){this.leftGunJamShake=1;this.playGunJam();}
+    this.gunWasJammed=this.gun.jammed;this.leftGunWasJammed=this.secondaryGun.jammed;
+    const needsCock=this.gun.trigger&&(!this.gun.cocked||this.gun.jammed),jamKick=cockingJamKick(this.gunJamShake),shake=needsCock?Math.sin(now*.075)*.014:0;this.cockingHandle.position.set(.14+shake+jamKick*.022,.08+(needsCock?Math.cos(now*.11)*.009:0)+Math.abs(jamKick)*.012,-.08+this.cockTravel*.28+jamKick*.05);this.cockingHandle.rotation.z=(needsCock?Math.sin(now*.13)*.09:0)+jamKick*.18;
+    const leftNeedsCock=this.secondaryGun.trigger&&(!this.secondaryGun.cocked||this.secondaryGun.jammed),leftJamKick=cockingJamKick(this.leftGunJamShake),leftShake=leftNeedsCock?Math.sin(now*.075)*.014:0;this.leftCockingHandle.position.set(-.14-leftShake-leftJamKick*.022,.08+(leftNeedsCock?Math.cos(now*.11)*.009:0)+Math.abs(leftJamKick)*.012,-.08+this.leftCockTravel*.28+leftJamKick*.05);this.leftCockingHandle.rotation.z=(leftNeedsCock?-Math.sin(now*.13)*.09:0)-leftJamKick*.18;
     if(this.bombCover.parent){const targetRotation=this.bombCoverOpen?-2.25:0;this.bombCover.rotation.x+=(targetRotation-this.bombCover.rotation.x)*Math.min(1,elapsed*18);}
     if (this.gun.roundsFired !== this.shownRounds) { this.shownRounds = this.gun.roundsFired; this.gunRecoil = 1;this.playGunshot(this.gun.heat); }
+    if(this.secondaryGun.roundsFired!==this.leftShownRounds){this.leftShownRounds=this.secondaryGun.roundsFired;this.leftGunRecoil=1;this.playGunshot(this.secondaryGun.heat);}
     if(this.gunBarrelMaterial){const appearance=gunBarrelAppearance(this.gun.heat);this.gunBarrelMaterial.color.setRGB(...appearance.color);this.gunBarrelMaterial.emissive.setRGB(...appearance.emissive);this.gunBarrelMaterial.emissiveIntensity=appearance.intensity;}
+    if(this.leftGunBarrelMaterial){const appearance=gunBarrelAppearance(this.secondaryGun.heat);this.leftGunBarrelMaterial.color.setRGB(...appearance.color);this.leftGunBarrelMaterial.emissive.setRGB(...appearance.emissive);this.leftGunBarrelMaterial.emissiveIntensity=appearance.intensity;}
     this.updateAmmoDisplay();
     this.gunRecoil = Math.max(0, this.gunRecoil - elapsed * 18);
+    this.leftGunRecoil=Math.max(0,this.leftGunRecoil-elapsed*18);
+    this.gunJamShake=Math.max(0,this.gunJamShake-elapsed*6.5);this.leftGunJamShake=Math.max(0,this.leftGunJamShake-elapsed*6.5);
     this.gunTrigger.rotation.x = (this.gun.trigger ? -.34 : 0) + this.gunRecoil * .08;
+    this.leftGunTrigger.rotation.x=(this.secondaryGun.trigger?-.34:0)+this.leftGunRecoil*.08;
     for(const button of[0,2] as MouseButton[]){const hand=this.hands[button];if(hand.visible){const active=this.drags.has(button);hand.position.z=active?.01:.035;hand.rotation.x=active?.12:0;}}
     this.updateTracers();
     if (active) for(const spinner of this.propeller.children)spinner.rotation.z += this.sim.rpm * Math.PI / 30 * elapsed;
@@ -503,13 +531,17 @@ export class FlightGame {
     if (this.audio&&this.gain&&this.oscillators.length) {const base=18+this.sim.rpm/29,rough=1-this.sim.health*.65-this.sim.mixtureEfficiency*.18;this.oscillators[0].frequency.setTargetAtTime(base,this.audio.currentTime,.08);this.oscillators[1].frequency.setTargetAtTime(base*2.01+(this.sim.aircraftType==='bomber'?1.8:0),this.audio.currentTime,.1);this.oscillators[2].frequency.setTargetAtTime(base*.503,this.audio.currentTime,.14);if(this.noiseGain)this.noiseGain.gain.setTargetAtTime(.09+c.throttle*.08+Math.max(0,rough)*.14,this.audio.currentTime,.12);this.gain.gain.setTargetAtTime(active&&this.sim.engine!=='off'&&!this.sim.crashed?.075+c.throttle*.055:0,this.audio.currentTime,.12);}
     if (now - this.reportTime > 120) {
       this.reportTime = now; const s = this.sim;
-      const status = s.crashed ? `CRASHED · ${s.crashCause || 'IMPACT'} · ENTER HANGAR` : this.gun.roundsRemaining === 0 ? 'GUN EMPTY · ENTER HANGAR TO REARM' : this.gun.jammed ? 'GUN JAMMED · CYCLE COCKING HANDLE' : this.gun.heat > .72 ? 'GUN HOT · DISPERSION INCREASING' : Math.max(Math.abs(s.position.x),Math.abs(s.position.z))>4800?'MAP EDGE · TURN BACK':s.stall ? 'STALL · LOWER THE NOSE' : s.temperature > 110 ? 'ENGINE HOT · OPEN RADIATOR' : s.grounded ? (s.engine === 'off' ? 'PARKED · ENGINE OFF' : c.brake ? 'ENGINE ' + s.engine.toUpperCase() + ' · BRAKE SET' : 'GROUND ROLL · OPEN AIRSPACE') : 'AIRBORNE · OPEN AIRSPACE';
+      const fighter=s.aircraftType==='fighter',forwardGuns=fighter?[this.gun,this.secondaryGun]:[this.gun],allEmpty=forwardGuns.every(g=>g.roundsRemaining===0),jammedGun=this.gun.jammed?'RIGHT':fighter&&this.secondaryGun.jammed?'LEFT':'',hotGun=this.gun.heat>.72?'RIGHT':fighter&&this.secondaryGun.heat>.72?'LEFT':'';
+      const status = s.crashed ? `CRASHED · ${s.crashCause || 'IMPACT'} · ENTER HANGAR` : allEmpty ? `${fighter?'GUNS':'GUN'} EMPTY · ENTER HANGAR TO REARM` : jammedGun ? `${jammedGun} GUN JAMMED · CYCLE ITS COCKING HANDLE` : hotGun ? `${hotGun} GUN HOT · DISPERSION INCREASING` : Math.max(Math.abs(s.position.x),Math.abs(s.position.z))>4800?'MAP EDGE · TURN BACK':s.stall ? 'STALL · LOWER THE NOSE' : s.temperature > 110 ? 'ENGINE HOT · OPEN RADIATOR' : s.grounded ? (s.engine === 'off' ? 'PARKED · ENGINE OFF' : c.brake ? 'ENGINE ' + s.engine.toUpperCase() + ' · BRAKE SET' : 'GROUND ROLL · OPEN AIRSPACE') : 'AIRBORNE · OPEN AIRSPACE';
       const control = [...this.drags.values()][0]?.name ?? this.hover;
-      const value = control === 'yoke' ? `PITCH ${Math.round(c.pitch * 100)}% · ROLL ${Math.round(c.roll * 100)}%` : control === 'ignition' ? c.ignition ? 'ON' : 'OFF' : control === 'brake' ? c.brake ? 'SET — CLICK TO RELEASE' : 'RELEASED' : control === 'trigger' ? this.gun.roundsRemaining === 0 ? 'EMPTY' : this.gun.jammed ? 'JAMMED' : this.gun.cocked ? `READY · ${this.gun.roundsRemaining} ROUNDS` : 'NOT COCKED' : control === 'cocking' ? `${this.gun.cocked ? 'ACTION READY' : 'PULL DOWN FULLY'} · ${Math.round(this.cockTravel * 100)}%` : control === 'bomb' ? `${s.bombsRemaining} REMAINING · CLICK TO RELEASE` : control ? Math.round(c[control] * 100) + '%' : '';
-      const hint = control ? `${control.toUpperCase()} · ${value}${control==='mixture'||control==='radiator'?' · WIND CLOCKWISE TO INCREASE':control==='throttle'||control==='yoke'?' · DRAG TO ADJUST':control==='cocking'?' · DRAG DOWN AND RELEASE':''}` : s.crashed ? 'Enter the hangar to choose another aircraft or airfield.' : this.gun.roundsRemaining === 0 ? 'Ammunition exhausted. Enter the hangar to rearm.' : this.gun.jammed ? 'The gun has jammed. Drag the brass cocking handle fully down, then release.' : !this.gun.cocked ? 'Cock the gun once: drag its brass side handle fully down, then release.' : !c.ignition ? 'Click IGNITION in the cockpit to start your engine.' : c.brake && s.grounded ? 'Release BRAKE, then drag THROTTLE upward.' : 'Sight through the ring and bead · Hold the gun trigger to fire';
+      const controlGun=control==='leftTrigger'||control==='leftCocking'?this.secondaryGun:this.gun,controlTravel=control==='leftCocking'?this.leftCockTravel:this.cockTravel;
+      const value = control === 'yoke' ? `PITCH ${Math.round(c.pitch * 100)}% · ROLL ${Math.round(c.roll * 100)}%` : control === 'ignition' ? c.ignition ? 'ON' : 'OFF' : control === 'brake' ? c.brake ? 'SET — CLICK TO RELEASE' : 'RELEASED' : control === 'trigger'||control==='leftTrigger' ? controlGun.roundsRemaining === 0 ? 'EMPTY' : controlGun.jammed ? 'JAMMED' : controlGun.cocked ? `READY · ${controlGun.roundsRemaining} ROUNDS` : 'NOT COCKED' : control === 'cocking'||control==='leftCocking' ? `${controlGun.cocked ? 'ACTION READY' : 'PULL DOWN FULLY'} · ${Math.round(controlTravel * 100)}%` : control === 'bomb' ? `${s.bombsRemaining} REMAINING · CLICK TO RELEASE` : control ? Math.round(c[control] * 100) + '%' : '';
+      const controlName=control==='leftTrigger'?'LEFT TRIGGER':control==='leftCocking'?'LEFT COCKING':control?.toUpperCase();
+      const hint = control ? `${controlName} · ${value}${control==='mixture'||control==='radiator'?' · WIND CLOCKWISE TO INCREASE':control==='throttle'||control==='yoke'?' · DRAG TO ADJUST':control==='cocking'||control==='leftCocking'?' · DRAG DOWN AND RELEASE':''}` : s.crashed ? 'Enter the hangar to choose another aircraft or airfield.' : allEmpty ? 'Ammunition exhausted. Enter the hangar to rearm.' : jammedGun ? `The ${jammedGun.toLowerCase()} gun has jammed. Cycle its brass cocking handle.` : forwardGuns.some(g=>!g.cocked) ? `Cock ${fighter?'each gun':'the gun'}: drag ${fighter?'each brass side handle':'its brass side handle'} fully down, then release.` : !c.ignition ? 'Click IGNITION in the cockpit to start your engine.' : c.brake && s.grounded ? 'Release BRAKE, then drag THROTTLE upward.' : `Sight through ${fighter?'either ring and bead and hold its trigger':'the ring and bead · Hold the gun trigger'} to fire`;
       const attitude=readAttitude(s.orientation);
       const altitudeAboveGround=Math.max(0,s.position.y-this.terrain.heightAt(s.position.x,s.position.z)-1.15);
-      this.report(status, hint, `${this.fps.toFixed(0)} FPS · 60 Hz physics\nALT ${s.position.y.toFixed(1)} m  IAS ${(s.indicatedAirspeed * 3.6).toFixed(1)} km/h  LIMIT ${s.spec.overspeed} km/h\nAoA ${(s.alpha * 180 / Math.PI).toFixed(1)}°  LOAD ${s.loadFactor.toFixed(2)} g  V/S ${s.velocity.y.toFixed(1)} m/s\nLIFT ${s.lift.toFixed(0)} N  DRAG ${s.drag.toFixed(0)} N\nQ ${s.dynamicPressure.toFixed(0)} Pa  ELEV ${(s.effectiveElevator*100).toFixed(0)}%  RADIATOR DRAG ${s.radiatorDrag.toFixed(0)} N\nGROUND LOAD ${(s.groundLoad/9.81).toFixed(2)} g  PROP CLEAR ${Number.isFinite(s.propClearance)?s.propClearance.toFixed(2):'—'} m\nROLL ${(attitude.roll*180/Math.PI).toFixed(0)}° PITCH ${(attitude.pitch*180/Math.PI).toFixed(0)}°\nRPM ${s.rpm.toFixed(0)}  TEMP ${s.temperature.toFixed(1)}°C\nGUN ${this.gun.jammed?'JAMMED':this.gun.cocked?'READY':'SAFE'}  HEAT ${(this.gun.heat*100).toFixed(0)}%  AMMO ${this.gun.roundsRemaining}/${AMMO_CAPACITY}\nFUEL ${s.fuel.toFixed(1)} L  ENGINE ${(s.health * 100).toFixed(0)}%\nPOS ${s.position.x.toFixed(0)}, ${s.position.z.toFixed(0)}`,{started:this.started,flightId:this.flightId,canHangar:this.canHangar(),aircraftType:s.aircraftType,airfieldIndex:this.airfieldIndex,x:s.position.x,z:s.position.z,heading:-new T.Euler().setFromQuaternion(s.orientation,'YXZ').y*180/Math.PI,altitude:s.position.y,altitudeAboveGround,rollRadians:attitude.roll,rollControl:s.controls.roll,loopRotation:this.loopRotation,betweenTrees:!s.grounded&&!s.crashed&&s.scenery.isBetweenTrees(s.position,s.orientation,s.spec.span/2),grounded:s.grounded,crashed:s.crashed,battle:this.battle.info()});
+      const gunTelemetry=(gun:MachineGun)=>`${gun.jammed?'JAMMED':gun.cocked?'READY':'SAFE'}  HEAT ${(gun.heat*100).toFixed(0)}%  AMMO ${gun.roundsRemaining}/${gun.capacity}`;
+      this.report(status, hint, `${this.fps.toFixed(0)} FPS · 60 Hz physics\nALT ${s.position.y.toFixed(1)} m  IAS ${(s.indicatedAirspeed * 3.6).toFixed(1)} km/h  LIMIT ${s.spec.overspeed} km/h\nAoA ${(s.alpha * 180 / Math.PI).toFixed(1)}°  LOAD ${s.loadFactor.toFixed(2)} g  V/S ${s.velocity.y.toFixed(1)} m/s\nLIFT ${s.lift.toFixed(0)} N  DRAG ${s.drag.toFixed(0)} N\nQ ${s.dynamicPressure.toFixed(0)} Pa  ELEV ${(s.effectiveElevator*100).toFixed(0)}%  RADIATOR DRAG ${s.radiatorDrag.toFixed(0)} N\nGROUND LOAD ${(s.groundLoad/9.81).toFixed(2)} g  PROP CLEAR ${Number.isFinite(s.propClearance)?s.propClearance.toFixed(2):'—'} m\nROLL ${(attitude.roll*180/Math.PI).toFixed(0)}° PITCH ${(attitude.pitch*180/Math.PI).toFixed(0)}°\nRPM ${s.rpm.toFixed(0)}  TEMP ${s.temperature.toFixed(1)}°C\n${fighter?'RIGHT ':''}GUN ${gunTelemetry(this.gun)}${fighter?`\nLEFT GUN ${gunTelemetry(this.secondaryGun)}`:''}\nFUEL ${s.fuel.toFixed(1)} L  ENGINE ${(s.health * 100).toFixed(0)}%\nPOS ${s.position.x.toFixed(0)}, ${s.position.z.toFixed(0)}`,{started:this.started,flightId:this.flightId,canHangar:this.canHangar(),aircraftType:s.aircraftType,airfieldIndex:this.airfieldIndex,x:s.position.x,z:s.position.z,heading:-new T.Euler().setFromQuaternion(s.orientation,'YXZ').y*180/Math.PI,altitude:s.position.y,altitudeAboveGround,rollRadians:attitude.roll,rollControl:s.controls.roll,loopRotation:this.loopRotation,betweenTrees:!s.grounded&&!s.crashed&&s.scenery.isBetweenTrees(s.position,s.orientation,s.spec.span/2),grounded:s.grounded,crashed:s.crashed,battle:this.battle.info()});
     }
   };
   dispose() {

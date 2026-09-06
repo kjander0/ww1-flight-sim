@@ -3,9 +3,15 @@ import * as T from 'three';
 export const MUZZLE_VELOCITY = 620;
 export const REAR_GUN_MUZZLE_VELOCITY = 600;
 export const FORWARD_GUN_ELEVATION = .5 * Math.PI / 180;
-export const RATE_OF_FIRE = 10.5;
+export const RATE_OF_FIRE = 10;
 export const PROJECTILE_LIFE = 4.5;
-export const AMMO_CAPACITY = 250;
+export const AMMO_CAPACITY = 100;
+export const REAR_AMMO_CAPACITY = 250;
+export const HEAT_COOLING_RATE=.052;
+export const HEAT_PER_ROUND=.034;
+export const JAM_BASE_CHANCE=.00075;
+export const JAM_HEAT_CHANCE=.069;
+export function gunJamChance(heat:number){return JAM_BASE_CHANCE+heat**3*JAM_HEAT_CHANCE;}
 
 export type Projectile = {
   position: T.Vector3;
@@ -33,12 +39,14 @@ export class MachineGun {
   trigger = false;
   heat = 0;
   roundsFired = 0;
-  roundsRemaining = AMMO_CAPACITY;
+  roundsRemaining: number;
   projectiles: Projectile[] = [];
   impacts: ProjectileImpact[] = [];
   private cycle = 0;
 
-  constructor(private random: () => number = Math.random, readonly muzzleVelocity=MUZZLE_VELOCITY) {}
+  constructor(private random: () => number = Math.random, readonly muzzleVelocity=MUZZLE_VELOCITY,readonly capacity=AMMO_CAPACITY) {
+    this.roundsRemaining=capacity;
+  }
 
   cock() {
     this.cocked = true;
@@ -52,7 +60,7 @@ export class MachineGun {
     this.trigger = false;
     this.heat = 0;
     this.roundsFired = 0;
-    this.roundsRemaining = AMMO_CAPACITY;
+    this.roundsRemaining = this.capacity;
     this.cycle = 0;
     this.projectiles.length = 0;
     this.impacts.length = 0;
@@ -62,7 +70,7 @@ export class MachineGun {
   consumeImpacts() { return this.impacts.splice(0); }
 
   step(dt: number, state: GunStep) {
-    this.heat = Math.max(0, this.heat - dt * .026);
+    this.heat = Math.max(0, this.heat - dt * HEAT_COOLING_RATE);
     if (this.trigger && this.cocked && !this.jammed && this.roundsRemaining > 0) {
       this.cycle += dt;
       const interval = 1 / RATE_OF_FIRE;
@@ -108,13 +116,13 @@ export class MachineGun {
       previous: position.clone(),
       velocity: direction.multiplyScalar(this.muzzleVelocity).add(state.aircraftVelocity),
       age: 0,
-      tracer: this.roundsFired % 4 === 0,
+      tracer: this.roundsFired % 3 === 0,
     });
     this.roundsFired++;
     this.roundsRemaining--;
-    this.heat = Math.min(1, this.heat + .017);
+    this.heat = Math.min(1, this.heat + HEAT_PER_ROUND);
     // A cool, serviced gun is dependable; sustained fire rapidly becomes risky.
-    if (this.random() < .00025 + this.heat ** 3 * .023) {
+    if (this.random() < gunJamChance(this.heat)) {
       this.jammed = true;
       this.cocked = false;
       this.trigger = false;

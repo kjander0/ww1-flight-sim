@@ -91,12 +91,15 @@ test('existing gun projectiles sweep moving aircraft and attribute an airborne p
 });
 test('damaged AI may dive, reverse turns frequently, and return to normal tactics when safe',()=>{
   const b=match('ALLIED',()=>0),ai=b.planes[4];ai.departure='flying';ai.sim.grounded=false;ai.sim.position.set(0,600,0);ai.sim.velocity.set(0,0,-42);ai.sim.airspeed=42;ai.sim.damage(.18);
-  const fly=(b as unknown as {flyAI:(p:typeof ai,dt:number)=>void}).flyAI.bind(b);fly(ai,DT);assert.equal(ai.mode,'EVASIVE DIVE');assert.ok(ai.evasiveUntil>b.time);const direction=ai.evasiveDirection;b.time=ai.evasiveTurnAt;fly(ai,DT);assert.equal(ai.evasiveDirection,-direction);b.time=ai.evasiveUntil+.1;fly(ai,DT);assert.ok(!ai.mode.startsWith('EVASIVE'));
+  const fly=(b as unknown as {flyAI:(p:typeof ai,dt:number)=>void}).flyAI.bind(b);fly(ai,DT);assert.equal(ai.mode,'EVASIVE DIVE');assert.ok(ai.evasiveUntil-b.time>=15&&ai.evasiveUntil-b.time<=25);assert.ok(ai.evasiveTurnAt-b.time>=1&&ai.evasiveTurnAt-b.time<=4);const direction=ai.evasiveDirection;b.time=ai.evasiveTurnAt;fly(ai,DT);assert.equal(ai.evasiveDirection,-direction);assert.ok(ai.evasiveTurnAt-b.time>=1&&ai.evasiveTurnAt-b.time<=4);b.time=ai.evasiveUntil+.1;fly(ai,DT);assert.ok(!ai.mode.startsWith('EVASIVE'));
   const shooter=b.planes[0];shooter.gun.projectiles.push({position:new T.Vector3(0,600,8),previous:new T.Vector3(0,600,8),velocity:new T.Vector3(0,0,-650),age:0,tracer:true});b.step();const effects=b.consumeEffects();assert.ok(effects.some(e=>e.kind==='hit'));assert.ok(effects.some(e=>e.kind==='damage'&&e.targetId===ai.id));
 });
 test('a damaged AI pilot can choose not to enter an evasive manoeuvre',()=>{
   const b=match('ALLIED',()=>.99),ai=b.planes[4];ai.departure='flying';ai.sim.grounded=false;ai.sim.position.set(0,600,0);ai.sim.velocity.set(0,0,-42);ai.sim.airspeed=42;ai.sim.damage(.18);
   (b as unknown as {flyAI:(p:typeof ai,dt:number)=>void}).flyAI(ai,DT);assert.equal(ai.evasiveUntil,0);assert.ok(!ai.mode.startsWith('EVASIVE'));
+});
+test('fighter AI has two independent forward guns',()=>{
+  const b=match(),fighter=b.planes.find(p=>p.id!==0&&p.sim.aircraftType==='fighter')!;assert.equal(fighter.gun.capacity,100);assert.equal(fighter.secondary.capacity,100);fighter.gun.roundsRemaining=9;fighter.secondary.roundsRemaining=7;fighter.gun.reset();assert.equal(fighter.gun.roundsRemaining,100);assert.equal(fighter.secondary.roundsRemaining,7);
 });
 test('rear gunner fires only into clear rear-upper arc and respects own tail and friendlies',()=>{
   const b=match(),bomber=b.planes[3],target=b.planes[PLANES_PER_TEAM];bomber.sim.position.set(0,1000,0);bomber.sim.orientation.identity();bomber.sim.velocity.set(0,0,-40);target.sim.position.set(0,1015,150);target.sim.velocity.set(0,0,-40);

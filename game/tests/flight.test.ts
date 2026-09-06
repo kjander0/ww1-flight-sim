@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Euler, Vector3, PerspectiveCamera, Quaternion } from 'three';
 import { BRAKE_DECELERATION, FlightSimulation, DT, SPEC, coefficients, optimalMixture } from '../lib/flight/simulation';
-import { BRAKE_SHAKE_RPM, PILOT_HEIGHT, brakeButtonPose, bombButtonAction, explosionLevel, gunBarrelAppearance, movePilotLateral, overspeedShakeAmount, resolveMouseControl } from '../lib/flight/game';
+import { BRAKE_SHAKE_RPM, PILOT_HEIGHT, brakeButtonPose, bombButtonAction, cockingJamKick, explosionLevel, gunBarrelAppearance, movePilotLateral, overspeedShakeAmount, resolveMouseControl } from '../lib/flight/game';
 import { AIRCRAFT } from '../lib/flight/aircraft';
 
 function run(s: FlightSimulation, seconds: number, control?: (s: FlightSimulation) => void) {
@@ -30,6 +30,11 @@ test('brake holds an unpowered aircraft but full engine power can overcome it', 
 test('brake control presses inward and shakes only when set above warning RPM',()=>{
   const released=brakeButtonPose(false,BRAKE_SHAKE_RPM+100,20),set=brakeButtonPose(true,0,20),warning=brakeButtonPose(true,BRAKE_SHAKE_RPM+100,20);
   assert.ok(set.z<released.z);assert.equal(set.x,.76);assert.equal(set.y,-.45);assert.ok(warning.x!==set.x||warning.y!==set.y);assert.ok(BRAKE_DECELERATION<5.5);
+});
+test('a gun jam drives a brief oscillating cocking-handle kick',()=>{
+  assert.equal(cockingJamKick(0),0);assert.equal(cockingJamKick(1),0);
+  assert.notEqual(cockingJamKick(.9),0);assert.ok(Math.abs(cockingJamKick(.4))<.4);
+  assert.equal(cockingJamKick(-1),0);assert.equal(cockingJamKick(2),0);
 });
 test('each aircraft has a distinct progressive overspeed shake threshold',()=>{
   assert.deepEqual([AIRCRAFT.scout.overspeed,AIRCRAFT.fighter.overspeed,AIRCRAFT.bomber.overspeed],[210,250,190]);
