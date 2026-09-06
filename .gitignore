@@ -1,0 +1,30 @@
+# Installed dependencies
+node_modules/
+.pnp
+.pnp.*
+
+# Generated application output and local caches
+dist/
+.next/
+.vinext/
+.wrangler/
+.vercel/
+coverage/
+*.tsbuildinfo
+
+# Local environment files and credentials; keep safe example templates
+.env
+.env.*
+!.env.example
+!.env.sample
+*.pem
+
+# Deployment packages generated beside the game repository
+/*.tar.gz
+/*.tgz
+
+# Logs and operating-system files
+*.log
+.DS_Store
+Thumbs.db
+Desktop.ini

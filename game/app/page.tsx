@@ -1,0 +1,50 @@
+'use client';
+import './flight-additions.css';
+import { useEffect, useRef, useState } from 'react';
+import { Button } from '@/components/ui/button';
+import { Dialog, DialogContent, DialogTitle, DialogDescription } from '@/components/ui/dialog';
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
+import { Label } from '@/components/ui/label';
+import type { FlightGame, FlightInfo } from '@/lib/flight/game';
+import { AIRCRAFT, type AircraftType } from '@/lib/flight/aircraft';
+import { AIRFIELDS, riverX } from '@/lib/flight/terrain';
+
+export default function Home() {
+  const mount = useRef<HTMLDivElement>(null), game = useRef<FlightGame | null>(null);
+  const [ready, setReady] = useState(false), [error, setError] = useState('');
+  const [help, setHelp] = useState(false), [paused, setPaused] = useState(false), [telemetry, setTelemetry] = useState(false);
+  const [hangar, setHangar] = useState(false), [map, setMap] = useState(false);
+  const [info, setInfo] = useState<FlightInfo | null>(null);
+  const [type, setType] = useState<AircraftType>('scout'), [field, setField] = useState('0');
+  const [status, setStatus] = useState('PARKED · ENGINE OFF'), [hint, setHint] = useState('Click IGNITION in the cockpit to start your engine.'), [readout, setReadout] = useState('');
+  const aircraft = AIRCRAFT[info?.aircraftType ?? 'scout'];
+  useEffect(() => {
+    let disposed = false;
+    import('@/lib/flight/game').then(({ FlightGame }) => {
+      if (disposed || !mount.current) return;
+      try { game.current = new FlightGame(mount.current, (s,h,t,i) => { setStatus(s); setHint(h); setReadout(t); setInfo(i); }); setReady(true); }
+      catch { setError('WebGL2 could not start. Enable hardware acceleration and use a current desktop browser.'); }
+    }).catch(() => setError('The simulator could not load. Reload the page to try again.'));
+    return () => { disposed = true; game.current?.dispose(); game.current = null; };
+  }, []);
+  useEffect(() => { if (game.current) game.current.paused = paused || help || hangar; }, [paused, help, hangar, ready]);
+  return <main className="flight-app">
+    <div ref={mount} className="flight-viewport" aria-label="Interactive 3D aircraft cockpit" />
+    <header className="flight-header"><div className="wordmark"><span className="roundel" aria-hidden="true">✦</span><div>SUPER FLIGHT<small>DAWN PATROL / FLIGHT TRIALS</small></div></div><div className="mission-title"><span>02</span> {AIRFIELDS[info?.airfieldIndex ?? 0].name}<small>{aircraft.name.toUpperCase()} · FREE FLIGHT</small></div><div className="header-actions"><Button variant="ghost" onClick={() => setPaused(!paused)}>{paused ? 'RESUME' : 'PAUSE'}</Button><Button variant="ghost" disabled={!ready} onClick={() => { setType(info?.aircraftType ?? 'scout'); setField(String(info?.airfieldIndex ?? 0)); setHangar(true); }}>HANGAR</Button><Button variant="outline" onClick={() => setHelp(true)}>FLIGHT MANUAL</Button></div></header>
+    <aside className={`sortie-card ${map ? 'map-open' : ''}`}><div className="card-heading"><span className="eyebrow">{map ? 'NAVIGATION / 10 × 10 KM' : aircraft.name.toUpperCase()}</span><Button variant="ghost" onClick={() => setMap(!map)}>{map ? 'GUIDE' : 'MAP'}</Button></div>{map ? <NavigationMap info={info}/> : <><h1>Take to the skies.</h1><p>{aircraft.role.toLowerCase()}<br/>Four airfields across the valley.</p><ol><li>Ignition on. Mixture near 85%.</li><li>Release brake. Advance throttle.</li><li>At {aircraft.takeoff} km/h, pull gently.</li></ol></>}<div className="card-footer"><i/> LIVE FLIGHT MODEL <span>ITERATION 02</span></div></aside>
+    <div className="weather-card"><span className="eyebrow">FLYING CONDITIONS</span><strong>06:40 <span>LOCAL</span></strong><p>LIGHT WESTERLY · 7 KM/H</p><span className="weather-line">CLEAR SKIES <b>15°C</b></span></div>
+    <div className="flight-status"><i className={status.includes('STALL') || status.includes('CRASH') ? 'danger' : ''}/>{status}</div>
+    <div className="interaction-hint">{hint}</div>
+    {!ready && <div className="loading-flight" role="status">{error || 'Preparing your aircraft…'}</div>}
+    {paused && <div className="paused-notice">FLIGHT PAUSED</div>}
+    {telemetry && <pre className="telemetry">{readout}</pre>}
+    <footer className="flight-footer"><div><kbd>W A S D</kbd> LOOK <span/><kbd>C</kbd> CENTER VIEW <span/><kbd>DRAG</kbd> CONTROLS <span/><kbd>X</kbd> CENTER YOKE</div><div className="footer-actions"><Button variant="ghost" onClick={() => setMap(!map)}>{map ? 'HIDE MAP' : 'MAP'}</Button><Button variant="ghost" onClick={() => setTelemetry(!telemetry)}>{telemetry ? 'HIDE' : 'SHOW'} TELEMETRY</Button><Button variant="ghost" onClick={() => {game.current?.reset(); setPaused(false);}}>RESET SORTIE</Button></div></footer>
+    <Dialog open={hangar} onOpenChange={setHangar}><DialogContent className="flight-manual"><DialogTitle>Choose your sortie</DialogTitle><DialogDescription>Your flight pauses here. Beginning a sortie replaces your aircraft with a fully fuelled one on the selected runway.</DialogDescription><h3>Aircraft</h3><RadioGroup value={type} onValueChange={v => setType(v as AircraftType)} aria-label="Aircraft">{(Object.keys(AIRCRAFT) as AircraftType[]).map(key => <Label className="hangar-choice" key={key} htmlFor={`plane-${key}`}><RadioGroupItem id={`plane-${key}`} value={key}/><span><strong>{AIRCRAFT[key].name}</strong><small>{AIRCRAFT[key].role} · ROTATE {AIRCRAFT[key].takeoff} KM/H</small></span></Label>)}</RadioGroup><h3>Airfield</h3><RadioGroup value={field} onValueChange={v => setField(String(v))} aria-label="Airfield">{AIRFIELDS.map((f,i) => <Label className="hangar-choice" key={f.id} htmlFor={f.id}><RadioGroupItem id={f.id} value={String(i)}/><span>{f.name}<small>{f.team}</small></span></Label>)}</RadioGroup><Button onClick={() => { game.current?.startSortie(type,Number(field)); setHangar(false); setPaused(false); }}>BEGIN SORTIE</Button></DialogContent></Dialog>
+    <Dialog open={help} onOpenChange={setHelp}><DialogContent className="flight-manual"><DialogTitle>Flight manual</DialogTitle><DialogDescription>Three water-cooled biplanes with fixed-pitch propellers. Your flight pauses while this manual is open.</DialogDescription><dl><dt>Start & take off</dt><dd>Click IGNITION. Set mixture near 85%, radiator to 50%. Release BRAKE and drag the throttle upward. At 85 km/h in the scout, or 95 km/h in the fighter and bomber, drag the yoke down gently to raise the nose.</dd><dt>Fly & look</dt><dd>Drag the yoke sideways to bank, down to pull up, and up to lower the nose. Controls stay where released. X centers the yoke. WASD looks around; C centers your view. The LEVEL instrument shows aircraft pitch and bank regardless of where you look. Automatic rudder coordinates turns.</dd><dt>Wind the wheels</dt><dd>Grab a wheel and circle its centre. Clockwise makes the mixture richer or opens the radiator; anticlockwise leans or closes it. One and a half turns covers the full range. Release to retain the setting.</dd><dt>Engine management</dt><dd>Lean the mixture gradually as you climb, watching RPM at steady throttle. Opening the radiator increases cooling and aerodynamic drag. Close it partway for speed when temperature permits. A cold engine needs time to warm up.</dd><dt>Stall & landing</dt><dd>If STALL appears, push forward, level the wings, and regain airspeed. Approach around 95 km/h in the scout or 105 km/h in the heavier aircraft, with reduced throttle. Flare gently above the grass; brake after touchdown. Clear fields also permit takeoff. Trees, buildings, water and hard landings are dangerous.</dd><dt>Crashes & navigation</dt><dd>Harder crashes break off more pieces and throw your viewpoint from the cockpit. Reset to fly again. MAP shows your position and the four airfields; HANGAR lets you choose any aircraft and runway.</dd><dt>Shortcuts & current scope</dt><dd>I ignition · B brake · C view · X yoke · R reset. This is free flight. The bomber carries a rear gunner model and bomb load; working weapons, gunner AI, opponents and runway battles are the next milestones.</dd></dl></DialogContent></Dialog>
+  </main>;
+}
+const chart = (v:number) => (v+5000)/50;
+const riverPath = Array.from({length:101},(_,i) => {const z=-5000+i*100;return `${i?'L':'M'}${chart(riverX(z))},${chart(z)}`;}).join(' ');
+function NavigationMap({info}:{info:FlightInfo|null}) {
+  return <svg className="navigation-map" viewBox="-8 -12 216 224" role="img" aria-label="Navigation map: Allied airfields west, Central airfields east. North is up."><rect width="200" height="200" fill="#243a2a" stroke="#86977b"/>{[50,100,150].map(p=><path key={p} d={`M${p} 0V200 M0 ${p}H200`} stroke="#859b7540"/>)}<path d={riverPath} stroke="#77a6ad" fill="none" strokeWidth="2"/>{AIRFIELDS.map(f=><g key={f.id} transform={`translate(${chart(f.x)},${chart(f.z)})`} fill={f.team==='ALLIED'?'#d5ce93':'#e99776'}><rect x="-2" y="-10" width="4" height="20"/><text textAnchor="middle" y="20">{f.name}</text></g>)}{info&&<g transform={`translate(${chart(Math.max(-5000,Math.min(5000,info.x)))},${chart(Math.max(-5000,Math.min(5000,info.z)))}) rotate(${info.heading})`}><path d="M0 -6L4 5L0 3L-4 5Z" fill={info.crashed?'#fa8a55':'#fff9dc'} stroke="#17221c" strokeWidth=".8"/></g>}<text x="100" y="-4" textAnchor="middle">N ↑</text><text x="0" y="212">0</text><text x="100" y="212" textAnchor="middle">5</text><text x="200" y="212" textAnchor="end">10 km</text></svg>;
+}

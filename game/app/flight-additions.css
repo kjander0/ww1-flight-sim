@@ -1,0 +1,10 @@
+.sortie-card{pointer-events:auto}
+.card-heading{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.card-heading button{font:11px monospace;padding:4px 7px;height:26px}
+.navigation-map{width:100%;margin:14px 0;color:#d8dfc9;overflow:visible}
+.navigation-map text{font:7px monospace;fill:currentColor}
+.hangar-choice{display:flex;align-items:center;gap:12px;padding:10px 12px;border:1px solid #82927160;cursor:pointer;font-size:14px}
+.hangar-choice:has([data-checked]){border-color:#deca8a;background:#344133}
+.hangar-choice small{display:block;font:12px monospace;color:#bdc5b4;margin-top:5px;line-height:1.4}
+.flight-manual h3{font:14px monospace;text-transform:uppercase;letter-spacing:1px;margin-top:8px;color:#e4d49c}
+@media(max-width:760px),(max-height:620px){.sortie-card.map-open{display:block;top:110px;width:210px}}
