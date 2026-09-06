@@ -45,7 +45,7 @@ export class BattleView {
   private particles:ParticleEffects;
   constructor(private scene:T.Scene,private battle:Battle){scene.add(this.root);this.particles=new ParticleEffects(scene,battle.surface);for(const p of battle.planes.slice(1)){const model=aircraftModel(p.sim.aircraftType,p.team);this.root.add(model.g);this.models.set(p.id,{...model,generation:p.generation,effects:new CrashEffects(scene,battle.surface),camera:new T.PerspectiveCamera()});}for(const target of battle.parkedPlanes){const model=aircraftModel(target.type,target.team,false),wreck=parkedWreck(target);model.g.position.copy(target.position);model.g.quaternion.copy(target.rotation);wreck.position.copy(target.position);wreck.quaternion.copy(target.rotation);wreck.visible=false;this.root.add(model.g,wreck);this.parkedModels.set(target.id,{intact:model.g,wreck});}}
   update(dt:number,alpha:number,camera?:T.Camera){
-    for(const event of this.battle.consumeEffects())this.particles.emit(event);this.particles.update(dt,this.battle.planes);
+    let playerHits=0;for(const event of this.battle.consumeEffects()){this.particles.emit(event);if(event.kind==='damage'&&event.targetId===0){playerHits++;if(camera)this.particles.emitCockpitDamage(camera,this.battle.planes[0].sim.velocity);}}this.particles.update(dt,this.battle.planes);
     for(const target of this.battle.parkedPlanes){const model=this.parkedModels.get(target.id)!;model.intact.visible=!target.destroyed;model.wreck.visible=target.destroyed;}
     for(const p of this.battle.planes.slice(1)){const m=this.models.get(p.id)!;
       let halo=this.halos.get(p.id);
@@ -64,6 +64,7 @@ export class BattleView {
     for(const b of this.battle.bombs){let m=this.bombMeshes.get(b.id);if(!m){m=bombModel();this.root.add(m);this.bombMeshes.set(b.id,m);}m.position.lerpVectors(b.previous,b.position,alpha);m.quaternion.setFromUnitVectors(new T.Vector3(0,0,-1),b.velocity.clone().normalize());}
     const blasts=new Set(this.battle.blasts.map(b=>b.id));for(const[id,m]of this.blastMeshes)if(!blasts.has(id)){this.root.remove(m);(m.material as T.Material).dispose();this.blastMeshes.delete(id);}
     for(const b of this.battle.blasts){let m=this.blastMeshes.get(b.id);if(!m){m=new T.Mesh(this.blastGeometry,this.blastMaterial.clone());this.root.add(m);this.blastMeshes.set(b.id,m);}m.position.copy(b.position);m.position.y+=b.age*4;m.scale.setScalar(2+Math.min(b.age,1.5)*15);const mat=m.material as T.MeshBasicMaterial;mat.color.set(b.age<.35?'#ffc563':'#595950');mat.opacity=Math.max(0,.8-b.age*.16);}
+    return playerHits;
   }
   private disposeObject(o:T.Object3D){const mats=new Set<T.Material>();o.traverse(c=>{if(c instanceof T.Mesh){c.geometry.dispose();for(const m of Array.isArray(c.material)?c.material:[c.material])mats.add(m);}});mats.forEach(m=>m.dispose());o.removeFromParent();}
   dispose(){for(const m of this.models.values())m.effects.dispose();this.particles.dispose();this.disposeObject(this.root);this.blastGeometry.dispose();this.blastMaterial.dispose();}

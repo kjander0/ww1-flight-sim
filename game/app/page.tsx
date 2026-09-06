@@ -21,7 +21,7 @@ import { AIRCRAFT, type AircraftType } from '@/lib/flight/aircraft';
 import { AIRFIELDS, riverX } from '@/lib/flight/terrain';
 import {
   ACHIEVEMENTS,
-  flightSchoolProgressLabel,
+  achievementProgressLabel,
   loadAchievementState,
   observeAchievements,
   saveAchievementState,
@@ -91,9 +91,18 @@ export default function Home() {
     const result = observeAchievements(achievementState.current, {
       started: info.started,
       flightId: info.flightId,
+      aircraftType: info.aircraftType,
       grounded: info.grounded,
       crashed: info.crashed,
       altitudeAboveGround: info.altitudeAboveGround,
+      rollRadians: info.rollRadians,
+      rollControl: info.rollControl,
+      loopRotation: info.loopRotation,
+      betweenTrees: info.betweenTrees,
+      enemyBuildingsBombed: info.battle.enemyBuildingsBombed,
+      enemyAircraftStrafed: info.battle.enemyAircraftStrafed,
+      enemyAircraftKills: info.battle.enemyAircraftKills,
+      enemyAircraftBombed: info.battle.enemyAircraftBombed,
     });
     if (result.state === achievementState.current) return;
     achievementState.current = result.state;
@@ -139,10 +148,10 @@ export default function Home() {
                 <button type="button"><strong>{currentAchievement.name}</strong></button>
               </AchievementTooltip>
             ) : (
-              <strong>All achievements complete</strong>
+              <strong>All missions complete</strong>
             )}
-            {currentAchievement?.id === 'flight-school' && (
-              <small>{flightSchoolProgressLabel(achievements)}</small>
+            {currentAchievement && (
+              <small>{achievementProgressLabel(achievements, currentAchievement.id)}</small>
             )}
             {currentAchievement && (
               <p className="mission-intro-details">
@@ -151,14 +160,6 @@ export default function Home() {
             )}
           </aside>
           <div className="flight-tools">
-            <Button
-              variant="ghost"
-              disabled={!ready || info?.crashed}
-              title="Temporary test control: raise this aircraft 500 metres"
-              onClick={() => game.current?.raiseForTesting()}
-            >
-              +500 M TEST
-            </Button>
             {aircraft.bombs > 0 && (
               <Button
                 variant="ghost"
@@ -190,7 +191,7 @@ export default function Home() {
       )}
       {celebration && (
         <output className="achievement-celebration" aria-live="polite">
-          <span>ACHIEVEMENT COMPLETE</span>
+          <span>MISSION COMPLETE</span>
           <strong>{celebration}</strong>
         </output>
       )}
@@ -401,9 +402,9 @@ function AchievementTooltip({
 
 function AchievementList({ state }: { state: AchievementState }) {
   return (
-    <aside className="achievement-list" aria-label="Achievements">
+    <aside className="achievement-list" aria-label="Missions">
       <div className="achievement-list-heading">
-        <span>ACHIEVEMENTS</span>
+        <span>MISSIONS</span>
         <small>
           {ACHIEVEMENTS.filter((achievement) => state.completed[achievement.id]).length}/
           {ACHIEVEMENTS.length}

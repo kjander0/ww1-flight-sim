@@ -1,6 +1,8 @@
 import * as T from 'three';
 
-export const MUZZLE_VELOCITY = 650;
+export const MUZZLE_VELOCITY = 620;
+export const REAR_GUN_MUZZLE_VELOCITY = 600;
+export const FORWARD_GUN_ELEVATION = .5 * Math.PI / 180;
 export const RATE_OF_FIRE = 10.5;
 export const PROJECTILE_LIFE = 4.5;
 export const AMMO_CAPACITY = 250;
@@ -36,7 +38,7 @@ export class MachineGun {
   impacts: ProjectileImpact[] = [];
   private cycle = 0;
 
-  constructor(private random: () => number = Math.random) {}
+  constructor(private random: () => number = Math.random, readonly muzzleVelocity=MUZZLE_VELOCITY) {}
 
   cock() {
     this.cocked = true;
@@ -104,7 +106,7 @@ export class MachineGun {
     this.projectiles.push({
       position,
       previous: position.clone(),
-      velocity: direction.multiplyScalar(MUZZLE_VELOCITY).add(state.aircraftVelocity),
+      velocity: direction.multiplyScalar(this.muzzleVelocity).add(state.aircraftVelocity),
       age: 0,
       tracer: this.roundsFired % 4 === 0,
     });

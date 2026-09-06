@@ -33,6 +33,16 @@ export class ParticleEffects {
       this.burst(event.position,new T.Vector3(0,12,0),'#3c342b',20,1.8,3.2,1.7);
     }
   }
+  emitCockpitDamage(camera:T.Camera,carrierVelocity:T.Vector3){
+    camera.updateMatrixWorld();
+    const forward=camera.getWorldDirection(new T.Vector3()),right=new T.Vector3(1,0,0).applyQuaternion(camera.quaternion),up=new T.Vector3(0,1,0).applyQuaternion(camera.quaternion);
+    for(let i=0;i<30;i++){
+      const position=camera.position.clone().addScaledVector(forward,.45+this.random()*.55).addScaledVector(right,(this.random()-.5)*.7).addScaledVector(up,(this.random()-.5)*.42);
+      const velocity=carrierVelocity.clone().addScaledVector(forward,-4-this.random()*8).addScaledVector(right,(this.random()-.5)*7).addScaledVector(up,(this.random()-.35)*5);
+      const color=new T.Color(i%5===0?'#ffd37a':i%3===0?'#9b9a8c':'#6e4d31');
+      this.add(position,velocity,color,.025+this.random()*.045,.18+this.random()*.24,.8,1.5);
+    }
+  }
   update(dt:number,planes:Plane[]){
     for(const plane of planes){
       const s=plane.sim;if(s.crashed||s.engine==='off')continue;

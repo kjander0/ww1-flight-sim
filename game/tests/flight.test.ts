@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Euler, Vector3, PerspectiveCamera, Quaternion } from 'three';
 import { BRAKE_DECELERATION, FlightSimulation, DT, SPEC, coefficients, optimalMixture } from '../lib/flight/simulation';
-import { BRAKE_SHAKE_RPM, brakeButtonPose, bombButtonAction, gunBarrelAppearance, movePilotLateral, overspeedShakeAmount, raiseAircraftForTesting, resolveMouseControl } from '../lib/flight/game';
+import { BRAKE_SHAKE_RPM, PILOT_HEIGHT, brakeButtonPose, bombButtonAction, explosionLevel, gunBarrelAppearance, movePilotLateral, overspeedShakeAmount, resolveMouseControl } from '../lib/flight/game';
 import { AIRCRAFT } from '../lib/flight/aircraft';
 
 function run(s: FlightSimulation, seconds: number, control?: (s: FlightSimulation) => void) {
@@ -18,6 +18,9 @@ test('pilot can slide laterally within cockpit limits',()=>{
 });
 test('covered bomb release requires one click to open before it can release',()=>{
   assert.equal(bombButtonAction(false),'open');assert.equal(bombButtonAction(true),'release');
+});
+test('distant explosions attenuate continuously to silence',()=>{
+  assert.equal(explosionLevel(0),1);assert.equal(explosionLevel(1000),.5);assert.equal(explosionLevel(2000),0);assert.equal(explosionLevel(8000),0);
 });
 function airborne() { const s = new FlightSimulation(); s.windEnabled = false; s.position.set(0, 500, 0); s.velocity.set(0, 0, -40); s.grounded = false; return s; }
 test('brake holds an unpowered aircraft but full engine power can overcome it', () => {
@@ -36,13 +39,6 @@ test('each aircraft has a distinct progressive overspeed shake threshold',()=>{
     assert.ok(overspeedShakeAmount(spec.overspeed+50,spec.overspeed)>overspeedShakeAmount(spec.overspeed+20,spec.overspeed));
   }
   assert.equal(overspeedShakeAmount(400,200),1.5);
-});
-test('temporary test lift raises a live aircraft 500 metres without changing its motion',()=>{
-  const s=new FlightSimulation();s.position.set(12,40,-8);s.velocity.set(3,-2,-30);s.orientation.setFromEuler(new Euler(.2,.3,.1));
-  const velocity=s.velocity.clone(),orientation=s.orientation.clone();
-  assert.equal(raiseAircraftForTesting(s),true);assert.deepEqual(s.position.toArray(),[12,540,-8]);assert.equal(s.grounded,false);
-  assert.ok(s.velocity.equals(velocity));assert.ok(s.orientation.equals(orientation));
-  s.crashed=true;assert.equal(raiseAircraftForTesting(s),false);assert.equal(s.position.y,540);
 });
 test('each aircraft suffers airframe breakup at twice its overspeed threshold',()=>{
   for(const type of Object.keys(AIRCRAFT) as (keyof typeof AIRCRAFT)[]){
@@ -180,7 +176,7 @@ test('bank input produces a coordinated turn, with energy cost at idle', () => {
   assert.ok(forward.x > .1, `right turn forward component ${forward.x}`); assert.ok(s.airspeed < 40);
 });
 test('all cockpit control centers project inside the visible desktop viewport', () => {
-  const camera = new PerspectiveCamera(60, 16 / 9, .025, 12000); camera.position.set(0, .68, 1.3);
+  const camera = new PerspectiveCamera(60, 16 / 9, .025, 12000); camera.position.set(0, PILOT_HEIGHT, 1.3);
   camera.quaternion.copy(new Quaternion().setFromEuler(new Euler(-.23, 0, 0, 'YXZ'))); camera.updateMatrixWorld();
   for (const [x, y, z] of [[-.76,-.34,-.39],[-.38,-.34,-.4],[.38,-.34,-.4],[0,-.27,-.12],[.76,-.29,-.38],[.76,-.49,-.38]]) {
     const p = new Vector3(x,y,z).project(camera); assert.ok(Math.abs(p.x) < .95 && Math.abs(p.y) < .90, `control ${x},${y},${z} projects to ${p.x},${p.y}`);

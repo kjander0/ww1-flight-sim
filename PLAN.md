@@ -2,7 +2,7 @@
 
 ## Current rules override — iteration 04
 
-The user replaced the six-versus-six runway-destruction battle with eight active aircraft total (four per team, player included) and a race to 100 points. Each enemy aircraft crash awards 10; each enemy hangar/tower destroyed by a bomb awards 10 once. The current implementation connects the existing projectile gun to aircraft damage, adds individually released wing bombs, AI pilots/rear gunners, eight-second reinforcement slots, persistent building destruction, score HUD and win/draw state. AI reinforcement flights start airborne. The older runway-victory and twelve-aircraft descriptions below are historical planning, superseded by these rules.
+The user replaced the six-versus-six runway-destruction battle with ten active aircraft total (five per team, player included) and a race to 100 points. Each enemy aircraft crash awards 10; each enemy hangar/tower destroyed by a bomb awards 10 once. The current implementation connects the existing projectile gun to aircraft damage, adds individually released wing bombs, AI pilots/rear gunners, eight-second reinforcement slots, persistent building destruction, score HUD and win/draw state. AI reinforcement flights start airborne. The older runway-victory and twelve-aircraft descriptions below are historical planning, superseded by these rules.
 
 Headless match scenarios now cover a complete race, gun and bomb scoring, roster caps, respawns and outcome freeze. Browser handling/performance validation, detailed damage, AI perception and runway circuits remain future work.
 
@@ -241,5 +241,5 @@ These support the foundations; numerical aircraft coefficients, balance, perform
 
 ## Current airfield revision
 
-Implemented hangar-first aircraft selection with aerial airfield preview, apron taxi starts, stopped-runway aircraft changes retaining match state, runway-based AI departure/replacement queues, green/red aircraft halos, bomber-only release controls and unrestricted faster head turning. Scoring is now 5 points per aircraft loss or enemy building destroyed. The active roster remains eight (four per team). Earlier runway-destruction and airborne-reinforcement proposals are superseded.
+Implemented hangar-first aircraft selection with aerial airfield preview, apron taxi starts, stopped-runway aircraft changes retaining match state, runway-based AI departure/replacement queues, green/red aircraft halos, bomber-only release controls and unrestricted faster head turning. Scoring is now 5 points per aircraft loss or enemy building destroyed. The active roster is ten (five per team). Earlier runway-destruction and airborne-reinforcement proposals are superseded.
 

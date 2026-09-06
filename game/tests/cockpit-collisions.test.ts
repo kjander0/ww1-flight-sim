@@ -4,9 +4,10 @@ import { Euler, Matrix4, MeshBasicMaterial, PerspectiveCamera, Quaternion, Rayca
 import { createFuselage, projectThrottleGrip, throttleAtPointer } from '../lib/flight/cockpit';
 import { SceneryCollisions } from '../lib/flight/collisions';
 import { FlightSimulation } from '../lib/flight/simulation';
+import { PILOT_HEIGHT } from '../lib/flight/game';
 
 function camera(yaw = 0, pitch = -.23) {
-  const c = new PerspectiveCamera(60, 16/9, .025, 12000); c.position.set(0, .68, 1.3);
+  const c = new PerspectiveCamera(60, 16/9, .025, 12000); c.position.set(0, PILOT_HEIGHT, 1.3);
   c.quaternion.setFromEuler(new Euler(pitch, yaw, 0, 'YXZ')); c.updateMatrixWorld(); return c;
 }
 test('throttle grip moves upward with increasing power and tracks its projected drag path', () => {
@@ -33,7 +34,7 @@ test('throttle tracks after looking sideways and clamps to reachable travel', ()
 });
 test('actual fuselage meshes do not obstruct the instrument faces or yoke', () => {
   const body = createFuselage(new MeshBasicMaterial()); body.updateMatrixWorld(true);
-  const eye = new Vector3(0, .68, 1.3), ray = new Raycaster();
+  const eye = new Vector3(0, PILOT_HEIGHT, 1.3), ray = new Raycaster();
   const targets = [-.71,-.355,0,.355,.71].flatMap(x => [new Vector3(x, .065, -.56), new Vector3(x, -.06, -.56)]);
   targets.push(new Vector3(0, -.25, -.2));
   for (const target of targets) { ray.set(eye, target.clone().sub(eye).normalize()); ray.far = eye.distanceTo(target); assert.equal(ray.intersectObject(body, true).length, 0, `fuselage blocks ${target.toArray()}`); }
@@ -62,4 +63,18 @@ test('spatial buckets include obstacles across cell boundaries and negative coor
   const world = new SceneryCollisions(); world.addTree(-64, -64, 1); const q = new Quaternion();
   assert.equal(world.sweep(new Vector3(-64,8,-30), new Vector3(-64,8,-100), q, q)?.kind, 'TREE');
   assert.equal(world.sweep(new Vector3(100,8,-30), new Vector3(100,8,-100), q, q), null);
+});
+test('forest path detects a close tree on each side below the treetops', () => {
+  const world = new SceneryCollisions(), q = new Quaternion();
+  world.addTree(-10, 0, 1); world.addTree(10, 0, 1);
+  assert.equal(world.isBetweenTrees(new Vector3(0, 8, 0), q, 4.4), true);
+  assert.equal(world.isBetweenTrees(new Vector3(0, 22, 0), q, 4.4), false);
+  const oneTree = new SceneryCollisions(); oneTree.addTree(-10, 0, 1);
+  assert.equal(oneTree.isBetweenTrees(new Vector3(0, 8, 0), q, 4.4), false);
+  const wideGap = new SceneryCollisions(); wideGap.addTree(-20, 0, 1); wideGap.addTree(20, 0, 1);
+  assert.equal(wideGap.isBetweenTrees(new Vector3(0, 8, 0), q, 4.4), false);
+  const relaxed = new SceneryCollisions(); relaxed.addTree(-14.5, -6.55, 1); relaxed.addTree(14.5, 6.55, 1);
+  assert.equal(relaxed.isBetweenTrees(new Vector3(0, 8, 0), q, 4.4), true);
+  const staggered = new SceneryCollisions(); staggered.addTree(-14.5, -6.65, 1); staggered.addTree(14.5, 6.65, 1);
+  assert.equal(staggered.isBetweenTrees(new Vector3(0, 8, 0), q, 4.4), false);
 });

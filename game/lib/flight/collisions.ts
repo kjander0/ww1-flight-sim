@@ -2,6 +2,7 @@ import { Box3, Plane, Quaternion, Vector3 } from 'three';
 
 type Obstacle = { kind: string; bounds: Box3; center?: Vector3; radius?: number; planes?: Plane[] };
 type Part = { center: Vector3; radius: number };
+type Tree = { x: number; z: number; base: number; top: number };
 export type SceneryHit = { kind: string; time: number };
 
 // Overlapping spheres represent the nose, fuselage, both wings and tail, not just the camera.
@@ -50,6 +51,7 @@ function convexTime(start: Vector3, end: Vector3, planes: Plane[], radius: numbe
 export class SceneryCollisions {
   isEnabled: (kind:string,bounds:Box3)=>boolean=()=>true;
   private grid = new Map<string, Obstacle[]>();
+  private trees: Tree[] = [];
   private nearby = new Set<Obstacle>();
   private start = new Vector3(); private end = new Vector3();
   private poseStart = new Vector3(); private poseEnd = new Vector3();
@@ -68,8 +70,30 @@ export class SceneryCollisions {
     this.add({ kind, center, radius, bounds: new Box3(center.clone().addScalar(-radius), center.clone().addScalar(radius)) });
   }
   addTree(x: number, z: number, scale: number, base=0) {
+    this.trees.push({ x, z, base, top: base + 20 * scale });
     this.addBox('TREE', new Vector3(x - .35 * scale, base, z - .35 * scale), new Vector3(x + .35 * scale, base+9 * scale, z + .35 * scale));
     for (const [height, radius] of [[9.5, 4.2], [16, 3], [20, 1.7]]) this.sphere('TREE', new Vector3(x, base+height * scale, z), radius * scale);
+  }
+  isBetweenTrees(position: Vector3, rotation: Quaternion, halfSpan: number) {
+    const forward = new Vector3(0, 0, -1).applyQuaternion(rotation); forward.y = 0;
+    const right = new Vector3(1, 0, 0).applyQuaternion(rotation); right.y = 0;
+    if (forward.lengthSq() < .25 || right.lengthSq() < .25) return false;
+    forward.normalize(); right.normalize();
+    const maxGap = (halfSpan * 2 + 18) * 1.1;
+    const maxClearance = maxGap / 2 - halfSpan;
+    let left: { along: number; side: number } | null = null;
+    let rightTree: { along: number; side: number } | null = null;
+    for (const tree of this.trees) {
+      const dx = tree.x - position.x, dz = tree.z - position.z;
+      const along = dx * forward.x + dz * forward.z;
+      const side = dx * right.x + dz * right.z;
+      const clearance = Math.abs(side) - halfSpan;
+      if (Math.abs(along) > 10 || clearance < 1 || clearance > maxClearance || position.y <= tree.base + 1 || position.y + 1.7 >= tree.top) continue;
+      const candidate = { along, side };
+      if (side < 0 && (!left || Math.abs(along) < Math.abs(left.along))) left = candidate;
+      if (side > 0 && (!rightTree || Math.abs(along) < Math.abs(rightTree.along))) rightTree = candidate;
+    }
+    return !!left && !!rightTree && Math.abs(left.along - rightTree.along) <= 13.2 && rightTree.side - left.side <= maxGap;
   }
   addHangar(x: number, z: number, base=0) {
     this.addBox('HANGAR', new Vector3(x - 16.2, base, z - 17.5), new Vector3(x + 16.2, base+11, z + 17.5));

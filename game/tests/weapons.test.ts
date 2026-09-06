@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as T from 'three';
-import { AMMO_CAPACITY, MachineGun, RATE_OF_FIRE } from '../lib/flight/weapons';
+import { AMMO_CAPACITY, MachineGun, MUZZLE_VELOCITY, RATE_OF_FIRE } from '../lib/flight/weapons';
 
 const state = {
   muzzle: new T.Vector3(0, 100, 0),
@@ -11,6 +11,7 @@ const state = {
 };
 
 void test('gun must be cocked and fires at its cyclic rate while held', () => {
+  assert.equal(MUZZLE_VELOCITY, 620);
   const gun = new MachineGun(() => .5);
   gun.trigger = true;
   gun.step(1, state);

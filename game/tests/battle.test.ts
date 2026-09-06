@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as T from 'three';
 import { haloStrength } from '../lib/flight/battle-view';
-import { Battle, BLAST_KILL_RADIUS, rackPosition, segmentBox, segmentSphere, terrainHit, type Bomb, type Plane } from '../lib/flight/battle';
+import { Battle, BLAST_KILL_RADIUS, FORWARD_GUN_DAMAGE, PLANES_PER_TEAM, forwardGunDirection, gunHitDamage, rackPosition, segmentBox, segmentSphere, terrainHit, type Bomb, type Plane } from '../lib/flight/battle';
 import { parkingPosition, stoppedRunway, turnHeadYaw } from '../lib/flight/airfield-ops';
 import { Terrain } from '../lib/flight/terrain';
 import { FlightSimulation, DT } from '../lib/flight/simulation';
@@ -10,9 +10,23 @@ import { MachineGun } from '../lib/flight/weapons';
 import { BattleView, bombModel } from '../lib/flight/battle-view';
 import { WorldView } from '../lib/flight/world';
 const terrain=new Terrain();
+test('forward gun is elevated slightly above the aircraft centreline',()=>{
+  const direction=forwardGunDirection(new T.Quaternion());
+  assert.ok(direction.y>0);
+  assert.ok(Math.abs(Math.asin(direction.y)*180/Math.PI-.5)<1e-10);
+});
+test('bomber durability and rear-gun damage use the requested hit counts',()=>{
+  assert.equal(gunHitDamage('fighter',false),FORWARD_GUN_DAMAGE);
+  assert.equal(gunHitDamage('fighter',true),FORWARD_GUN_DAMAGE*.5);
+  assert.equal(gunHitDamage('bomber',false),1/8);
+  assert.equal(gunHitDamage('bomber',true),1/16);
+  const bomber=new FlightSimulation();bomber.aircraftType='bomber';bomber.reset();
+  for(let hit=0;hit<7;hit++)bomber.damage(gunHitDamage('bomber',false));
+  assert.equal(bomber.crashed,false);bomber.damage(gunHitDamage('bomber',false));assert.equal(bomber.crashCause,'SHOT DOWN');
+});
 function random(){let seed=5;return()=>{seed=(Math.imul(seed,1664525)+1013904223)|0;return(seed>>>0)/4294967296;};}
-function match(team:'ALLIED'|'CENTRAL'='ALLIED'){
-  const sim=new FlightSimulation();sim.aircraftType='bomber';sim.spawn.copy(parkingPosition(terrain,team==='ALLIED'?0:2));sim.groundHeightAt=terrain.heightAt;sim.reset();const rng=random();return new Battle(terrain,sim,new MachineGun(rng),team,rng);
+function match(team:'ALLIED'|'CENTRAL'='ALLIED',rng=random()){
+  const sim=new FlightSimulation();sim.aircraftType='bomber';sim.spawn.copy(parkingPosition(terrain,team==='ALLIED'?0:2));sim.groundHeightAt=terrain.heightAt;sim.reset();return new Battle(terrain,sim,new MachineGun(rng),team,rng);
 }
 function ticks(b:Battle,seconds:number){for(let i=0;i<Math.ceil(seconds/DT);i++)b.step();}
 test('AI taxis and takes off using physics; head turns wrap and hangar requires a stopped runway',t=>{
@@ -22,13 +36,13 @@ test('AI taxis and takes off using physics; head turns wrap and hangar requires 
   assert.equal(stoppedRunway(b.planes[0].sim),-1);
   for(let i=0;i<360/DT;i++){b.step();for(const p of b.planes.slice(1))if(p.departure==='flying')departed.add(p.id);}
   t.diagnostic(JSON.stringify(b.planes.slice(1).map(p=>({id:p.id,stage:p.departure,cause:p.sim.crashCause,pos:p.sim.position.toArray().map(Math.round)}))));
-  assert.equal(departed.size,7);
+  assert.equal(departed.size,9);
   const s=b.planes[0].sim;s.position.x=-2800;assert.equal(stoppedRunway(s),0);s.velocity.z=1;assert.equal(stoppedRunway(s),-1);
   assert.ok(Math.abs(turnHeadYaw(0,1,4)-.31681469)<.00001);
 });
-test('eight slots include player, sides can change, and respawns never create extra planes',()=>{
-  for(const team of['ALLIED','CENTRAL'] as const){const b=match(team);assert.equal(b.planes.length,8);assert.deepEqual(b.info().counts,{ALLIED:4,CENTRAL:4});assert.equal(b.planes[0].team,team);
-    b.planes[4].sim.crash('TEST');b.step();assert.equal(b.info().counts[b.planes[4].team],3);const generation=b.planes[4].generation;ticks(b,7);assert.equal(b.planes[4].generation,generation);ticks(b,1.2);assert.equal(b.planes[4].generation,generation+1);assert.deepEqual(b.info().counts,{ALLIED:4,CENTRAL:4});
+test('ten slots include player, sides can change, and respawns never create extra planes',()=>{
+  for(const team of['ALLIED','CENTRAL'] as const){const b=match(team);assert.equal(b.planes.length,10);assert.deepEqual(b.info().counts,{ALLIED:5,CENTRAL:5});assert.equal(b.planes[0].team,team);
+    b.planes[4].sim.crash('TEST');b.step();assert.equal(b.info().counts[b.planes[4].team],4);const generation=b.planes[4].generation;ticks(b,7);assert.equal(b.planes[4].generation,generation);ticks(b,1.2);assert.equal(b.planes[4].generation,generation+1);assert.deepEqual(b.info().counts,{ALLIED:5,CENTRAL:5});
     const changed=team==='ALLIED'?'CENTRAL':'ALLIED';b.setPlayerTeam(changed);assert.equal(b.playerTeam,changed);assert.equal(b.planes[0].team,changed);
   }
 });
@@ -41,24 +55,24 @@ test('four bombs leave alternating wing racks individually with inherited veloci
 });
 test('direct bomb hits destroy hangars and towers without a score system',()=>{
   const b=match(),target=b.buildings.find(t=>t.team==='CENTRAL'&&t.kind==='HANGAR')!;
-  const drop=(team:'ALLIED'|'CENTRAL')=>b.bombs.push({id:999,team,position:target.position.clone().add(new T.Vector3(0,20,0)),previous:target.position.clone(),velocity:new T.Vector3(0,-300,0),age:0});
-  drop('ALLIED');b.step();assert.equal(target.destroyed,true);assert.equal(b.bombs.length,0);assert.equal(b.blasts.length,1);assert.equal(b.message,'HANGAR DESTROYED');
+  const drop=(team:'ALLIED'|'CENTRAL',ownerId=0)=>b.bombs.push({id:999,ownerId,team,position:target.position.clone().add(new T.Vector3(0,20,0)),previous:target.position.clone(),velocity:new T.Vector3(0,-300,0),age:0});
+  drop('ALLIED');b.step();assert.equal(target.destroyed,true);assert.equal(b.bombs.length,0);assert.equal(b.blasts.length,1);assert.equal(b.message,'HANGAR DESTROYED');assert.equal(b.info().enemyBuildingsBombed,1);
   drop('ALLIED');ticks(b,.1);assert.equal(target.destroyed,true);
-  const friendly=b.buildings.find(t=>t.team==='ALLIED'&&t.kind==='TOWER')!;b.bombs.push({id:1000,team:'ALLIED',position:friendly.position.clone().add(new T.Vector3(0,22,0)),previous:friendly.position.clone(),velocity:new T.Vector3(0,-300,0),age:0});b.step();assert.equal(friendly.destroyed,true);
+  const friendly=b.buildings.find(t=>t.team==='ALLIED'&&t.kind==='TOWER')!;b.bombs.push({id:1000,ownerId:0,team:'ALLIED',position:friendly.position.clone().add(new T.Vector3(0,22,0)),previous:friendly.position.clone(),velocity:new T.Vector3(0,-300,0),age:0});b.step();assert.equal(friendly.destroyed,true);assert.equal(b.info().enemyBuildingsBombed,1);
 });
 test('each airfield has several parked aircraft that bombs and machine guns can destroy once',()=>{
   const bombMatch=match(),byField=new Map<string,number>();for(const p of bombMatch.parkedPlanes){const field=p.id.split('-')[1];byField.set(field,(byField.get(field)??0)+1);}assert.deepEqual([...byField.values()],[4,4,4,4]);
-  const bombTarget=bombMatch.parkedPlanes.find(p=>p.team==='CENTRAL')!,bomb:Bomb={id:43,team:'ALLIED',position:bombTarget.position.clone(),previous:bombTarget.position.clone(),velocity:new T.Vector3(0,-30,0),age:1};
+  const bombTarget=bombMatch.parkedPlanes.find(p=>p.team==='CENTRAL')!,bomb:Bomb={id:43,ownerId:0,team:'ALLIED',position:bombTarget.position.clone(),previous:bombTarget.position.clone(),velocity:new T.Vector3(0,-30,0),age:1};
   (bombMatch as unknown as {explode:(bomb:Bomb)=>void}).explode(bomb);assert.equal(bombTarget.destroyed,true);(bombMatch as unknown as {explode:(bomb:Bomb)=>void}).explode(bomb);assert.equal(bombTarget.destroyed,true);
   const gunMatch=match(),shooter=gunMatch.planes[0],gunTarget=gunMatch.parkedPlanes.find(p=>p.team==='CENTRAL')!,from=gunTarget.position.clone().add(new T.Vector3(0,0,10)),to=gunTarget.position.clone().add(new T.Vector3(0,0,-10));
-  const hit=(gunMatch as unknown as {bulletHit:(shooter:Plane,from:T.Vector3,to:T.Vector3)=>number|null}).bulletHit.bind(gunMatch);for(let i=0;i<6;i++)assert.notEqual(hit(shooter,from,to),null);assert.equal(gunTarget.destroyed,true);hit(shooter,from,to);assert.equal(gunTarget.destroyed,true);
+  const hit=(gunMatch as unknown as {bulletHit:(shooter:Plane,from:T.Vector3,to:T.Vector3)=>number|null}).bulletHit.bind(gunMatch);for(let i=0;i<6;i++)assert.notEqual(hit(shooter,from,to),null);assert.equal(gunTarget.destroyed,true);assert.equal(gunMatch.info().enemyAircraftStrafed,1);hit(shooter,from,to);assert.equal(gunTarget.destroyed,true);assert.equal(gunMatch.info().enemyAircraftStrafed,1);
 });
 test('a bomb blast destroys every aircraft inside its lethal radius',()=>{
-  const b=match(),near=b.planes[4],edge=b.planes[5],position=new T.Vector3(200,500,200);near.sim.position.copy(position).add(new T.Vector3(BLAST_KILL_RADIUS-1,0,0));edge.sim.position.copy(position).add(new T.Vector3(BLAST_KILL_RADIUS+1,0,0));
-  const bomb:Bomb={id:44,team:'ALLIED',position,previous:position.clone(),velocity:new T.Vector3(0,-30,0),age:1};(b as unknown as {explode:(bomb:Bomb)=>void}).explode(bomb);assert.equal(near.sim.crashCause,'BOMB BLAST');assert.equal(edge.sim.crashed,false);
+  const b=match(),near=b.planes[PLANES_PER_TEAM],friend=b.planes[1],edge=b.planes[PLANES_PER_TEAM+1],position=new T.Vector3(200,500,200);near.sim.position.copy(position).add(new T.Vector3(BLAST_KILL_RADIUS-1,0,0));friend.sim.position.copy(position).add(new T.Vector3(2,0,0));edge.sim.position.copy(position).add(new T.Vector3(BLAST_KILL_RADIUS+1,0,0));
+  const bomb:Bomb={id:44,ownerId:0,team:'ALLIED',position,previous:position.clone(),velocity:new T.Vector3(0,-30,0),age:1};(b as unknown as {explode:(bomb:Bomb)=>void}).explode(bomb);assert.equal(near.sim.crashCause,'BOMB BLAST');assert.equal(friend.sim.crashCause,'BOMB BLAST');assert.equal(edge.sim.crashed,false);assert.equal(b.info().enemyAircraftBombed,1);
 });
 test('near miss outside blast radius leaves targets intact and high-speed terrain sweep finds ridges',()=>{
-  const b=match(),target=b.buildings[8],position=target.position.clone().add(new T.Vector3(60,1,0));b.bombs.push({id:1,team:'ALLIED',position,previous:position.clone(),velocity:new T.Vector3(0,-300,0),age:0});b.step();assert.equal(target.destroyed,false);
+  const b=match(),target=b.buildings[8],position=target.position.clone().add(new T.Vector3(60,1,0));b.bombs.push({id:1,ownerId:0,team:'ALLIED',position,previous:position.clone(),velocity:new T.Vector3(0,-300,0),age:0});b.step();assert.equal(target.destroyed,false);
   assert.notEqual(terrainHit(new T.Vector3(-20,5,0),new T.Vector3(20,5,0),(x)=>Math.abs(x)<5?10:0),null);
   assert.equal(segmentBox(new T.Vector3(0,0,10),new T.Vector3(0,0,-10),new T.Box3(new T.Vector3(-1,-1,-1),new T.Vector3(1,1,1))),.45);
   assert.notEqual(segmentSphere(new T.Vector3(-20,0,0),new T.Vector3(20,0,0),2),null);
@@ -71,17 +85,22 @@ test('crashes queue a delayed respawn while the world continues indefinitely',()
 test('abandoning the player aircraft queues exactly one replacement',()=>{
   const b=match(),player=b.planes[0];assert.equal(b.retirePlayer(),true);assert.equal(player.sim.crashCause,'ABANDONED AIRCRAFT');const respawnAt=player.respawnAt;assert.equal(player.respawnQueued,true);assert.equal(b.retirePlayer(),true);assert.equal(player.respawnAt,respawnAt);
 });
-test('existing gun projectiles sweep moving aircraft and stop on contact',()=>{
-  const b=match(),shooter=b.planes[0],victim=b.planes[4];victim.sim.position.set(0,800,0);victim.sim.orientation.identity();victim.sim.velocity.set(0,0,-35);victim.sim.airframeHealth=.17;
-  shooter.gun.projectiles.push({position:new T.Vector3(0,800,6),previous:new T.Vector3(0,800,6),velocity:new T.Vector3(0,0,-650),age:0,tracer:true});b.step();assert.equal(victim.sim.crashCause,'SHOT DOWN');assert.equal(shooter.gun.projectiles.length,0);b.step();assert.equal(victim.respawnQueued,true);
+test('existing gun projectiles sweep moving aircraft and attribute an airborne player kill once',()=>{
+  const b=match(),shooter=b.planes[0],victim=b.planes[PLANES_PER_TEAM];victim.sim.position.set(0,800,0);victim.sim.orientation.identity();victim.sim.velocity.set(0,0,-35);victim.sim.grounded=false;victim.sim.airframeHealth=.17;
+  shooter.gun.projectiles.push({position:new T.Vector3(0,800,6),previous:new T.Vector3(0,800,6),velocity:new T.Vector3(0,0,-650),age:0,tracer:true});b.step();assert.equal(victim.sim.crashCause,'SHOT DOWN');assert.equal(shooter.gun.projectiles.length,0);assert.equal(b.info().enemyAircraftKills,1);b.step();assert.equal(victim.respawnQueued,true);assert.equal(b.info().enemyAircraftKills,1);
 });
-test('aircraft break evasively after taking fire and impacts feed the shared effects queue',()=>{
-  const b=match(),ai=b.planes[4];ai.departure='flying';ai.sim.grounded=false;ai.sim.position.set(0,600,0);ai.sim.velocity.set(0,0,-42);ai.sim.airspeed=42;ai.sim.damage(.18);
-  (b as unknown as {flyAI:(p:typeof ai,dt:number)=>void}).flyAI(ai,DT);assert.equal(ai.mode,'EVASIVE BREAK');assert.ok(ai.evasiveUntil>b.time);
-  const shooter=b.planes[0];shooter.gun.projectiles.push({position:new T.Vector3(0,600,8),previous:new T.Vector3(0,600,8),velocity:new T.Vector3(0,0,-650),age:0,tracer:true});b.step();const effects=b.consumeEffects();assert.ok(effects.some(e=>e.kind==='hit'));assert.ok(effects.some(e=>e.kind==='damage'));
+test('damaged AI may dive, reverse turns frequently, and return to normal tactics when safe',()=>{
+  const b=match('ALLIED',()=>0),ai=b.planes[4];ai.departure='flying';ai.sim.grounded=false;ai.sim.position.set(0,600,0);ai.sim.velocity.set(0,0,-42);ai.sim.airspeed=42;ai.sim.damage(.18);
+  const fly=(b as unknown as {flyAI:(p:typeof ai,dt:number)=>void}).flyAI.bind(b);fly(ai,DT);assert.equal(ai.mode,'EVASIVE DIVE');assert.ok(ai.evasiveUntil>b.time);const direction=ai.evasiveDirection;b.time=ai.evasiveTurnAt;fly(ai,DT);assert.equal(ai.evasiveDirection,-direction);b.time=ai.evasiveUntil+.1;fly(ai,DT);assert.ok(!ai.mode.startsWith('EVASIVE'));
+  const shooter=b.planes[0];shooter.gun.projectiles.push({position:new T.Vector3(0,600,8),previous:new T.Vector3(0,600,8),velocity:new T.Vector3(0,0,-650),age:0,tracer:true});b.step();const effects=b.consumeEffects();assert.ok(effects.some(e=>e.kind==='hit'));assert.ok(effects.some(e=>e.kind==='damage'&&e.targetId===ai.id));
+});
+test('a damaged AI pilot can choose not to enter an evasive manoeuvre',()=>{
+  const b=match('ALLIED',()=>.99),ai=b.planes[4];ai.departure='flying';ai.sim.grounded=false;ai.sim.position.set(0,600,0);ai.sim.velocity.set(0,0,-42);ai.sim.airspeed=42;ai.sim.damage(.18);
+  (b as unknown as {flyAI:(p:typeof ai,dt:number)=>void}).flyAI(ai,DT);assert.equal(ai.evasiveUntil,0);assert.ok(!ai.mode.startsWith('EVASIVE'));
 });
 test('rear gunner fires only into clear rear-upper arc and respects own tail and friendlies',()=>{
-  const b=match(),bomber=b.planes[3],target=b.planes[4];bomber.sim.position.set(0,1000,0);bomber.sim.orientation.identity();bomber.sim.velocity.set(0,0,-40);target.sim.position.set(0,1015,150);target.sim.velocity.set(0,0,-40);
+  const b=match(),bomber=b.planes[3],target=b.planes[PLANES_PER_TEAM];bomber.sim.position.set(0,1000,0);bomber.sim.orientation.identity();bomber.sim.velocity.set(0,0,-40);target.sim.position.set(0,1015,150);target.sim.velocity.set(0,0,-40);
+  assert.equal(bomber.rear.muzzleVelocity,600);
   // Keep AI guidance out of this geometry/weapon test.
   const step=(b as unknown as {stepGun:(p:typeof bomber,g:MachineGun,rear:boolean,dt:number)=>void}).stepGun.bind(b);
   for(let i=0;i<20;i++)step(bomber,bomber.rear,true,DT);assert.ok(bomber.rear.roundsFired>0);
@@ -91,7 +110,7 @@ test('rear gunner fires only into clear rear-upper arc and respects own tail and
 });
 test('AI keeps the continuous world active with bombing, gunfire and replacements',t=>{
   const b=match();let maxBombs=0,shots=0;const previousShots=new Map<number,number>();const causes=new Set<string>();
-  for(let i=0;i<900/DT;i++){b.step();maxBombs=Math.max(maxBombs,b.bombs.length);assert.ok(b.info().counts.ALLIED<=4&&b.info().counts.CENTRAL<=4);for(const p of b.planes){assert.ok(p.sim.position.toArray().every(Number.isFinite));if(p.sim.crashCause)causes.add(p.sim.crashCause);const old=previousShots.get(p.id)??0;shots+=Math.max(0,p.gun.roundsFired-old);previousShots.set(p.id,p.gun.roundsFired);}}
+  for(let i=0;i<900/DT;i++){b.step();maxBombs=Math.max(maxBombs,b.bombs.length);assert.ok(b.info().counts.ALLIED<=PLANES_PER_TEAM&&b.info().counts.CENTRAL<=PLANES_PER_TEAM);for(const p of b.planes){assert.ok(p.sim.position.toArray().every(Number.isFinite));if(p.sim.crashCause)causes.add(p.sim.crashCause);const old=previousShots.get(p.id)??0;shots+=Math.max(0,p.gun.roundsFired-old);previousShots.set(p.id,p.gun.roundsFired);}}
   assert.ok(b.time>899);assert.ok(maxBombs>0);assert.ok(b.buildings.some(target=>target.destroyed));assert.ok(shots>30);assert.ok(causes.size>0);
   t.diagnostic(`World active at ${b.time.toFixed(0)} s; ${shots} rounds, ${b.buildings.filter(target=>target.destroyed).length} destroyed buildings; losses: ${[...causes].join(', ')}`);
 });
@@ -100,6 +119,7 @@ test('battle models, bomb disappearance, crash effects and destroyed building vi
   const context=new Proxy({}, {get:()=>()=>{}});Object.defineProperty(globalThis,'document',{configurable:true,value:{createElement:()=>({width:0,height:0,getContext:()=>context})}});
   let world:WorldView|undefined,view:BattleView|undefined;
   try{world=new WorldView(scene,terrain,b.planes[0].sim.scenery);view=new BattleView(scene,b);view.update(0,1);const before=scene.children.length;
+    const camera=new T.PerspectiveCamera();camera.position.copy(b.planes[0].sim.position).add(new T.Vector3(0,.7,0));b.effects.push({kind:'damage',position:b.planes[0].sim.position.clone(),velocity:b.planes[0].sim.velocity.clone(),intensity:.8,targetId:0});assert.equal(view.update(0,1,camera),1);const particlePoints=scene.children.find(child=>child instanceof T.Points) as T.Points;assert.ok(particlePoints.geometry.drawRange.count>=30);
     b.planes[3].sim.crash('TEST');b.step();view.update(DT,1);b.buildings[0].destroyed=true;world.updateBuildings(b.buildings);ticks(b,8.2);view.update(DT,1);view.dispose();view=undefined;assert.ok(scene.children.length<before);
     const model=bombModel(),bounds=new T.Box3().setFromObject(model);assert.ok(bounds.getSize(new T.Vector3()).z>.9);model.traverse(o=>{if(o instanceof T.Mesh){o.geometry.dispose();(o.material as T.Material).dispose();}});
   }finally{view?.dispose();world?.dispose();scene.traverse(o=>{if(o instanceof T.Mesh)o.geometry.dispose();});if(old)Object.defineProperty(globalThis,'document',old);else Reflect.deleteProperty(globalThis,'document');}
@@ -110,7 +130,7 @@ test('AI departure paths clear the generated trees and airfield buildings',()=>{
   const world=new WorldView(scene,terrain,b.planes[0].sim.scenery),departed=new Set<number>();
   (b as unknown as {scenery:typeof b.planes[0]['sim']['scenery']}).scenery=b.planes[0].sim.scenery;
   (b as unknown as {stepGun:()=>void}).stepGun=()=>{};
-  try{for(let i=0;i<360/DT&&departed.size<7;i++){b.step();for(const p of b.planes.slice(1)){if(p.departure==='flying')departed.add(p.id);if(!departed.has(p.id))assert.equal(p.sim.crashed,false,`${p.id}: ${p.sim.crashCause}`);}}assert.equal(departed.size,7);}
+  try{for(let i=0;i<360/DT&&departed.size<9;i++){b.step();for(const p of b.planes.slice(1)){if(p.departure==='flying')departed.add(p.id);if(!departed.has(p.id))assert.equal(p.sim.crashed,false,`${p.id}: ${p.sim.crashCause}`);}}assert.equal(departed.size,9);}
   finally{world.dispose();if(old)Object.defineProperty(globalThis,'document',old);else Reflect.deleteProperty(globalThis,'document');}
 });
 
