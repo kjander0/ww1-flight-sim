@@ -10,9 +10,23 @@ import {
 } from '@/components/ui/dialog';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Label } from '@/components/ui/label';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
 import type { FlightGame, FlightInfo } from '@/lib/flight/game';
 import { AIRCRAFT, type AircraftType } from '@/lib/flight/aircraft';
 import { AIRFIELDS, riverX } from '@/lib/flight/terrain';
+import {
+  ACHIEVEMENTS,
+  flightSchoolProgressLabel,
+  loadAchievementState,
+  observeAchievements,
+  saveAchievementState,
+  type AchievementState,
+} from '@/lib/flight/achievements';
 
 export default function Home() {
   const mount = useRef<HTMLDivElement>(null),
@@ -26,8 +40,21 @@ export default function Home() {
   const [info, setInfo] = useState<FlightInfo | null>(null);
   const [type, setType] = useState<AircraftType>('scout'),
     [field, setField] = useState('0');
+  const initialAchievements = useRef<AchievementState | null>(null);
+  if (!initialAchievements.current) {
+    initialAchievements.current = loadAchievementState(
+      typeof window === 'undefined' ? undefined : window.sessionStorage,
+    );
+  }
+  const achievementState = useRef(initialAchievements.current);
+  const [achievements, setAchievements] = useState(initialAchievements.current);
+  const [celebration, setCelebration] = useState('');
+  const [missionIntro, setMissionIntro] = useState(false);
   const aircraft = AIRCRAFT[info?.aircraftType ?? 'scout'];
   const battle = info?.battle;
+  const currentAchievement = ACHIEVEMENTS.find(
+    (achievement) => !achievements.completed[achievement.id],
+  );
   useEffect(() => {
     let disposed = false;
     import('@/lib/flight/game')
@@ -59,7 +86,38 @@ export default function Home() {
   useEffect(() => {
     game.current?.previewHangar(hangar ? Number(field) : null);
   }, [hangar, field, ready]);
+  useEffect(() => {
+    if (!info) return;
+    const result = observeAchievements(achievementState.current, {
+      started: info.started,
+      flightId: info.flightId,
+      grounded: info.grounded,
+      crashed: info.crashed,
+      altitudeAboveGround: info.altitudeAboveGround,
+    });
+    if (result.state === achievementState.current) return;
+    achievementState.current = result.state;
+    setAchievements(result.state);
+    saveAchievementState(result.state, window.sessionStorage);
+    if (result.completed.length) {
+      const completed = ACHIEVEMENTS.find(
+        (achievement) => achievement.id === result.completed[0],
+      );
+      if (completed) setCelebration(completed.name);
+    }
+  }, [info]);
+  useEffect(() => {
+    if (!celebration) return;
+    const timeout = window.setTimeout(() => setCelebration(''), 6000);
+    return () => window.clearTimeout(timeout);
+  }, [celebration]);
+  useEffect(() => {
+    if (!missionIntro) return;
+    const timeout = window.setTimeout(() => setMissionIntro(false), 3200);
+    return () => window.clearTimeout(timeout);
+  }, [missionIntro]);
   return (
+    <TooltipProvider>
     <main className={`flight-app ${hangar ? 'hangar-open' : ''}`}>
       <div
         ref={mount}
@@ -68,18 +126,34 @@ export default function Home() {
       />
       {!hangar && (
         <>
-          <output className="minimal-score" aria-label="Team score">
-            <span className="allied">ALLIED {battle?.scores.ALLIED ?? 0}</span>
-            <i />
-            <span className="central">{battle?.scores.CENTRAL ?? 0} CENTRAL</span>
-          </output>
           <aside className="mini-map">
             <NavigationMap info={info} />
+          </aside>
+          <aside
+            className={`current-achievement ${missionIntro ? 'mission-intro' : ''}`}
+            aria-label="Current mission"
+          >
+            <span>CURRENT MISSION</span>
+            {currentAchievement ? (
+              <AchievementTooltip achievement={currentAchievement}>
+                <button type="button"><strong>{currentAchievement.name}</strong></button>
+              </AchievementTooltip>
+            ) : (
+              <strong>All achievements complete</strong>
+            )}
+            {currentAchievement?.id === 'flight-school' && (
+              <small>{flightSchoolProgressLabel(achievements)}</small>
+            )}
+            {currentAchievement && (
+              <p className="mission-intro-details">
+                {currentAchievement.description}
+              </p>
+            )}
           </aside>
           <div className="flight-tools">
             <Button
               variant="ghost"
-              disabled={!ready || info?.crashed || !!battle?.winner}
+              disabled={!ready || info?.crashed}
               title="Temporary test control: raise this aircraft 500 metres"
               onClick={() => game.current?.raiseForTesting()}
             >
@@ -91,7 +165,6 @@ export default function Home() {
                 disabled={
                   !ready ||
                   info?.crashed ||
-                  !!battle?.winner ||
                   (battle?.bombs ?? 0) === 0
                 }
                 onClick={() => game.current?.releaseBomb()}
@@ -115,25 +188,10 @@ export default function Home() {
           </div>
         </>
       )}
-      {battle?.winner && (
-        <output className="match-result">
-          <h1>
-            {battle.winner === 'DRAW'
-              ? 'DRAW'
-              : battle.winner === battle.team
-                ? 'VICTORY'
-                : 'DEFEAT'}
-          </h1>
-          <p>
-            ALLIED {battle.scores.ALLIED} — {battle.scores.CENTRAL} CENTRAL
-          </p>
-          <Button
-            onClick={() => {
-              setHangar(true);
-            }}
-          >
-            NEW MATCH
-          </Button>
+      {celebration && (
+        <output className="achievement-celebration" aria-live="polite">
+          <span>ACHIEVEMENT COMPLETE</span>
+          <strong>{celebration}</strong>
         </output>
       )}
       {!ready && (
@@ -151,11 +209,12 @@ export default function Home() {
         <DialogContent className="flight-manual hangar-menu">
           <DialogTitle>Sortie hangar</DialogTitle>
           <DialogDescription>
-            {!info?.started || battle?.winner
-              ? 'Choose an airfield and aircraft to begin a race to 100. Your airfield determines your team.'
-              : 'Change aircraft and rearm. Your team is locked until this round is complete.'}{' '}
-            You start beside the runway.
+            Choose any aircraft and airfield. Your airfield determines your side,
+            and you can change sides whenever you return here. The world continues
+            until you refresh the page.
           </DialogDescription>
+          <div className="hangar-layout">
+          <section className="hangar-primary">
           <section className="hangar-briefing">
             <div>
               <span>FLYING CONDITIONS</span>
@@ -163,12 +222,12 @@ export default function Home() {
               <small>Light westerly · 7 km/h</small>
             </div>
             <div>
-              <span>MATCH</span>
+              <span>AIRSPACE</span>
               <strong>
-                ALLIED {battle?.scores.ALLIED ?? 0} —{' '}
-                {battle?.scores.CENTRAL ?? 0} CENTRAL
+                {battle?.counts.ALLIED ?? 0} ALLIED ·{' '}
+                {battle?.counts.CENTRAL ?? 0} CENTRAL
               </strong>
-              <small>{battle?.message ?? 'First team to 100'}</small>
+              <small>{battle?.message ?? 'World active until refresh'}</small>
             </div>
           </section>
           <div className="hangar-instructions">
@@ -214,11 +273,6 @@ export default function Home() {
                 <RadioGroupItem
                   id={f.id}
                   value={String(i)}
-                  disabled={
-                    !!info?.started &&
-                    !battle?.winner &&
-                    f.team !== battle?.team
-                  }
                 />
                 <span>
                   {f.name}
@@ -231,6 +285,7 @@ export default function Home() {
             onClick={() => {
               if (game.current?.startSortie(type, Number(field))) {
                 setLeftAircraft(false);
+                setMissionIntro(!!currentAchievement);
                 setHangar(false);
                 setPaused(false);
               }
@@ -239,7 +294,7 @@ export default function Home() {
           >
             ENTER AIRCRAFT
           </Button>
-          {info?.started && !battle?.winner && !info.crashed && !leftAircraft && (
+          {info?.started && !info.crashed && !leftAircraft && (
             <Button variant="ghost" onClick={() => setHangar(false)}>
               RETURN TO COCKPIT
             </Button>
@@ -252,6 +307,9 @@ export default function Home() {
               ? battle.message
               : 'Green halos: friendlies · Red halos: enemies'}
           </small>
+          </section>
+          <AchievementList state={achievements} />
+          </div>
         </DialogContent>
       </Dialog>
       <Dialog open={help} onOpenChange={setHelp}>
@@ -309,20 +367,64 @@ export default function Home() {
               hard impacts, ground loops, prop strikes, terrain, trees, buildings,
               water, and leaving the map can destroy the aircraft.
             </dd>
-            <dt>Battle, AI & navigation</dt>
+            <dt>Combat, AI & navigation</dt>
             <dd>
               MAP shows you, contacts, and all four airfields. Three allied and
               four enemy AI pilots taxi, take off, dogfight, bomb, and return as
-              replacements after losses. Aircraft crashes and each enemy hangar
-              or tower destroyed award 5 points; first to 100 wins. Your team is
-              locked for the match, damage persists, and simultaneous winning
-              scores produce a draw. Respawn or use HANGAR after a loss; leaving
-              a live aircraft away from a stationary home runway forfeits it.
+              replacements after losses. There is no score or finishing state:
+              air activity and damage continue until the page is refreshed. Enter
+              the hangar to change aircraft, airfield, or side. Leaving a live
+              aircraft away from a stationary runway forfeits it.
             </dd>
           </dl>
         </DialogContent>
       </Dialog>
     </main>
+    </TooltipProvider>
+  );
+}
+
+function AchievementTooltip({
+  achievement,
+  children,
+}: {
+  achievement: (typeof ACHIEVEMENTS)[number];
+  children: React.ReactElement;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger render={children} />
+      <TooltipContent side="left">{achievement.description}</TooltipContent>
+    </Tooltip>
+  );
+}
+
+function AchievementList({ state }: { state: AchievementState }) {
+  return (
+    <aside className="achievement-list" aria-label="Achievements">
+      <div className="achievement-list-heading">
+        <span>ACHIEVEMENTS</span>
+        <small>
+          {ACHIEVEMENTS.filter((achievement) => state.completed[achievement.id]).length}/
+          {ACHIEVEMENTS.length}
+        </small>
+      </div>
+      <p>Hover over a name to see its requirements.</p>
+      <ul>
+        {ACHIEVEMENTS.map((achievement) => {
+          const complete = !!state.completed[achievement.id];
+          return (
+            <li key={achievement.id} className={complete ? 'complete' : ''}>
+              <span aria-hidden="true">{complete ? '✓' : '○'}</span>
+              <AchievementTooltip achievement={achievement}>
+                <button type="button">{achievement.name}</button>
+              </AchievementTooltip>
+              <small>{complete ? 'COMPLETE' : 'IN PROGRESS'}</small>
+            </li>
+          );
+        })}
+      </ul>
+    </aside>
   );
 }
 const chart = (v: number) => (v + 5000) / 50;

@@ -1,16 +1,18 @@
-# Super Flight — iteration 04: team battle
+# Super Flight — continuous airspace and achievements
 
-## Current battle rules
+## Current world rules
 
-Four aircraft per team, including the player: one player and seven AI pilots. First team to 100 points wins. Each enemy aircraft crash awards 5 points, irrespective of cause; bombing an enemy hangar or tower awards 5 points once per destroyed building. Friendly building destruction earns nothing. Both scores reaching 100 in the same tick is a draw. Finished matches freeze weapons, physics, reinforcements and scoring.
+The airspace is continuous: there are no rounds, points, winners, or terminal match state. Seven AI pilots keep flying, fighting, bombing, and returning as replacements after losses. The selected airfield determines the player's side, and the player may change sides whenever they return to the hangar. Refreshing the page is the way to reset the world.
+
+The hangar shows the full achievement list, while the cockpit view shows the easiest incomplete achievement. Achievement names reveal their requirements on hover. Completion and progress are saved in browser session storage so completed achievements survive a refresh in the same browser tab. The first achievement, **Flight School**, requires a take-off, a climb to 100 m above ground level, and a safe landing in the same flight.
 
 The bomber carries four 30 kg bombs, two beneath each wing. The first cockpit click opens the square BOMB RELEASE guard; subsequent clicks on the exposed button, or the minimal HUD button, drop one at a time while alternating wings. Release is inhibited on the ground and debounced. Bombs inherit aircraft velocity, fall under gravity/drag, sweep terrain/buildings and produce a blast. Released racks disappear and payload mass decreases. Bombed buildings become rubble and lose their intact collision volume, while aircraft inside the lethal blast radius are destroyed.
 
 AI uses the same flight simulation and machine-gun ballistics as the player, with pursuit/lead, bursts, jam clearing, engine management, turning and diving attacks, overshoot attempts, terrain avoidance and bombing passes. Bomber rear gunners have a rear-upper firing arc and hold fire for friendly aircraft in their lane. Aircraft hits use swept moving collision boxes and airframe health. Player gun cocking, heat, dispersion and 250-round belts remain intact.
 
-AI starts airborne and re-enters after an eight-second loss delay; each replacement reuses its roster slot. A crashed player can respawn after that delay using R or RESPAWN, retaining team scores. NEW MATCH selects aircraft/team airfield and resets the match. The scoreboard, ammo/bomb/airframe display and navigation contacts read the same match state as physics.
+AI re-enters after an eight-second loss delay; each replacement reuses its roster slot. The hangar selects aircraft and airfield without resetting the world. Ammo, bomb, airframe, and navigation displays read the same continuous world state as physics.
 
-51 automated checks pass, including an unattended deterministic battle that reaches 100 with both teams scoring, gun kills and bombed buildings; team caps, duplicate-score prevention, win/draw freeze, respawn, bomb racks/payload, swept hits, friendly-fire inhibition and model lifecycle. These are headless checks, not a browser playtest or hardware frame-rate benchmark. AI tactics are an initial controller with direct target knowledge, airborne reinforcements and simplified damage; calibrated historical handling, realistic perception and automated runway circuits remain future work.
+Automated checks cover continuous AI activity, replacements, side changes, Flight School sequencing and persistence, bomb racks/payload, swept hits, friendly-fire inhibition, and model lifecycle. These are headless checks, not a browser playtest or hardware frame-rate benchmark. AI tactics are an initial controller with direct target knowledge, airborne reinforcements and simplified damage; calibrated historical handling, realistic perception and automated runway circuits remain future work.
 
 A browser WW1 free-flight prototype with a generated 10 × 10 km countryside, four 1,060 m airstrips, three water-cooled biplanes, and an interactive 3D cockpit. The scout favours turning, the fighter has greater speed, and the heavier two-seat bomber carries a modelled rear gunner and bomb payload.
 
@@ -33,14 +35,14 @@ unchanged.
 
 ## Fly
 
-- Initial spawn chooses a random aircraft and Allied airfield. NEW MATCH lets you select any aircraft and any of the four strips; the selected airfield determines your team.
+- Choose any aircraft and any of the four strips in the hangar; the selected airfield determines your side and can be changed on every visit.
 - Click IGNITION, release BRAKE, and drag the throttle upward. Its grip follows the closest reachable mouse position along the lever arc. Left and right mouse buttons each keep a hand on their last selected control; repeat that button anywhere to use the same control again, or click a different control to move that hand. Both buttons can be held together: while one hand is active, the other button keeps its existing binding so you can fly and fire simultaneously.
 - Grab a wheel and circle its centre: clockwise enriches mixture or opens radiator. One and a half turns covers the full range. Start with mixture near 85% and radiator near 50%; radiator opening increases both cooling and drag.
 - Drag the yoke downward to pull up and sideways to bank.
 - Drag yoke sideways to bank. Controls retain their settings. WASD looks around; Q and E slide the pilot left and right inside the cockpit. LEVEL shows aircraft pitch/roll independently of head direction.
 - MAP shows heading, position, river and airfields. Altitude is metres above sea level; airfields sit at different elevations.
 - Clear fields permit landing and takeoff. Terrain, trees, buildings, water and hard landings can cause crashes. Impact severity determines the number of debris pieces; the pilot viewpoint is thrown out and rolls before settling.
-- R / RESPAWN restores a crashed aircraft after its countdown, preserving scores. Pause, help and the new-match menu stop simulation; background tabs pause automatically. Engine audio begins after cockpit input.
+- Enter the hangar after a crash to choose another aircraft. The hangar and flight manual pause simulation; background tabs pause automatically. Engine audio begins after cockpit input.
 
 ## Implemented
 
@@ -62,7 +64,7 @@ Flight regression checks include all twelve aircraft/airfield departure combinat
 
 The generated-world test constructs actual geometry with canvas drawing stubbed, checks 256 chunks and four LODs per chunk, matches rendered airfield surfaces to physics heights, and checks runway/approach clearance with bomber collision dimensions. Bomber takeoff trajectories are also checked against the generated scenery. This is geometry/physics validation, not browser visual QA. TypeScript, production build and a local HTTP route response are checked separately.
 
-The current score race replaces the earlier runway-destruction win condition. Map-edge warning and a 700 m out-of-bounds margin precede a scored loss. Smoke/leak particles, detailed component damage, AI landing/rearming and advanced tactics remain future work. Bullet cover includes terrain and airfield buildings; decorative trees and village houses are not yet bullet cover. Aircraft still collide with their scenery proxies. Wreckage uses simple visual physics.
+Map-edge warning and a 700 m out-of-bounds margin precede an aircraft loss. Smoke/leak particles, detailed component damage, AI landing/rearming and advanced tactics remain future work. Bullet cover includes terrain and airfield buildings; decorative trees and village houses are not yet bullet cover. Aircraft still collide with their scenery proxies. Wreckage uses simple visual physics.
 
 Flight coefficients are gameplay parameters, not verified historical aircraft data. Ground contact uses a terrain non-penetration constraint rather than separate wheel suspension; terrain strikes are checked at the aircraft centre/gear, while scenery uses overlapping swept spheres. The larger airframes use slightly conservative collision radii. Debris uses boxes and a single ground radius per piece. Manual full circuits, cockpit visual checks and hardware performance benchmarking have not been recorded for this iteration. Optional WebMCP tools remain unverified in a supporting browser.
 
@@ -82,7 +84,7 @@ The Sites scaffold supplies React/Vinext and Vite. Rendering and simulation run 
 
 ## Hangar and airfield update
 
-The game opens in an aerial hangar preview. Choose a plane and airfield, then taxi from the east apron using low throttle and sideways yoke steering. Stop on any runway below 2.5 km/h to enable HANGAR; changing aircraft preserves the match and is restricted to your team. Starting after a match result begins a new score race. AI aircraft and replacements use apron parking, runway queuing, taxi, takeoff and a controlled departure climb.
+The game opens in an aerial hangar preview. Choose a plane and airfield, then taxi from the east apron using low throttle and sideways yoke steering. Stop on any runway below 2.5 km/h to return safely to the hangar. Changing aircraft or sides preserves the continuous world. AI aircraft and replacements use apron parking, runway queuing, taxi, takeoff and a controlled departure climb.
 
-Friendly aircraft have green camera-facing halos; enemies have red halos, hidden by terrain. The halos fade to a trace inside the 650 m shooting range so they do not obscure nearby aircraft. Head turning wraps through 360 degrees at 1.65 radians/second. Bomb controls appear only on the bomber, with the cockpit label raised toward the pilot. Aircraft crashes and enemy hangar/tower destruction award 5 points each; first to 100 wins.
+Friendly aircraft have green camera-facing halos; enemies have red halos, hidden by terrain. The halos update immediately after a side change and fade to a trace inside the 650 m shooting range so they do not obscure nearby aircraft. Head turning wraps through 360 degrees at 1.65 radians/second. Bomb controls appear only on the bomber, with the cockpit label raised toward the pilot.
 

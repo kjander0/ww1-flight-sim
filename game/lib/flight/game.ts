@@ -10,7 +10,7 @@ import { AMMO_CAPACITY, MachineGun } from './weapons';
 import { Battle, type BattleInfo, rackPosition } from './battle';
 import { BattleView, bombModel } from './battle-view';
 import { parkingPosition, stoppedRunway, turnHeadYaw } from './airfield-ops';
-export type FlightInfo={started:boolean;canHangar:boolean;aircraftType:AircraftType;airfieldIndex:number;x:number;z:number;heading:number;altitude:number;crashed:boolean;battle:BattleInfo};
+export type FlightInfo={started:boolean;flightId:string;canHangar:boolean;aircraftType:AircraftType;airfieldIndex:number;x:number;z:number;heading:number;altitude:number;altitudeAboveGround:number;grounded:boolean;crashed:boolean;battle:BattleInfo};
 
 type Control = 'throttle' | 'mixture' | 'radiator' | 'yoke' | 'ignition' | 'brake' | 'trigger' | 'cocking' | 'bomb';
 type Gauge = { needle: T.Group; max: number; read: () => number };
@@ -34,6 +34,9 @@ export function brakeButtonPose(on:boolean,rpm:number,now:number){
 }
 export class FlightGame {
   private started=false;
+  private readonly worldId=`${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  private sortieNumber=0;
+  private flightId=`${this.worldId}:0`;
   private previewField:number|null=0;
   previewHangar(field:number|null){this.previewField=field;}
   private canHangar(){return true;}
@@ -334,22 +337,21 @@ export class FlightGame {
   private visibility = () => { this.blur(); this.last = 0; this.accumulator = 0; if (document.hidden && this.audio && this.gain) this.gain.gain.setTargetAtTime(0, this.audio.currentTime, .04); };
   private resize = () => { const w = this.mount.clientWidth, h = this.mount.clientHeight; this.renderer.setSize(w, h); this.target.setSize(Math.round(600 * w / h), 600); this.camera.aspect = w / h; this.camera.fov = w / h < 1.3 ? 75 : 70; this.camera.updateProjectionMatrix(); };
   private setSpawn(){this.sim.spawn.copy(parkingPosition(this.terrain,this.airfieldIndex));}
-  raiseForTesting(){if(this.battle.winner||!raiseAircraftForTesting(this.sim))return false;this.prevPosition.copy(this.sim.position);return true;}
-  releaseBomb(sound=true){if(this.paused||this.battle.winner)return;if(sound){this.startAudio();this.playClick('heavy');}if(this.battle.release())this.battle.message=`BOMB AWAY · ${this.sim.bombsRemaining} REMAINING`;else if(this.sim.grounded)this.battle.message='BOMB RELEASE · AIRBORNE ONLY';else if(this.sim.bombsRemaining===0)this.battle.message='NO BOMBS · BOMBER CARRIES FOUR';}
+  raiseForTesting(){if(!raiseAircraftForTesting(this.sim))return false;this.prevPosition.copy(this.sim.position);return true;}
+  releaseBomb(sound=true){if(this.paused)return;if(sound){this.startAudio();this.playClick('heavy');}if(this.battle.release())this.battle.message=`BOMB AWAY · ${this.sim.bombsRemaining} REMAINING`;else if(this.sim.grounded)this.battle.message='BOMB RELEASE · AIRBORNE ONLY';else if(this.sim.bombsRemaining===0)this.battle.message='NO BOMBS · BOMBER CARRIES FOUR';}
   enterHangar(){
-    if(!this.started||this.battle.winner)return false;const runway=stoppedRunway(this.sim),safe=runway>=0&&AIRFIELDS[runway].team===this.battle.playerTeam;
+    if(!this.started)return false;const runway=stoppedRunway(this.sim),safe=runway>=0;
     if(!safe)this.battle.retirePlayer();this.blur();return !safe;
   }
   private resetView() { this.crashEffects.reset();this.aircraft.visible=true;this.propeller.visible=true;this.cockTravel=0;this.cockRatchet=0;this.gunRecoil=0;this.shownRounds=0;this.bombCoverOpen=false;this.bombHand=null;this.heardBlasts.clear(); this.prevPosition.copy(this.sim.position); this.prevRotation.copy(this.sim.orientation); this.yaw = 0; this.pitch = -.23;this.pilotLateral=0; this.accumulator = 0; this.blur();this.hover=null; }
   startSortie(type:AircraftType,airfieldIndex:number){
     if(!(type in AIRCRAFT)||!Number.isInteger(airfieldIndex)||airfieldIndex<0||airfieldIndex>=AIRFIELDS.length)throw new Error('Invalid aircraft or airfield');
-    const fresh=!this.started||!!this.battle.winner;
-    if(!fresh&&AIRFIELDS[airfieldIndex].team!==this.battle.playerTeam)return false;
     const parking=parkingPosition(this.terrain,airfieldIndex);
-    if(!fresh&&this.battle.planes.slice(1).some(p=>!p.sim.crashed&&p.sim.position.distanceTo(parking)<24)){this.battle.message='PARKING OCCUPIED · CHOOSE OTHER AIRFIELD';return false;}
+    if(this.battle.planes.slice(1).some(p=>!p.sim.crashed&&p.sim.position.distanceTo(parking)<24)){this.battle.message='PARKING OCCUPIED · CHOOSE OTHER AIRFIELD';return false;}
     this.crashEffects.reset();this.releaseAircraft();this.sim.aircraftType=type;this.airfieldIndex=airfieldIndex;this.setSpawn();this.sim.reset();this.gun.reset();this.resetView();this.buildAircraft();
-    if(fresh){this.battleView.dispose();this.battle=new Battle(this.terrain,this.sim,this.gun,AIRFIELDS[airfieldIndex].team,Math.random,this.sim.scenery);this.battleView=new BattleView(this.scene,this.battle);}
-    const p=this.battle.planes[0];p.homeField=airfieldIndex;p.rear.reset();p.cooldown=0;p.scored=false;p.generation++;p.previous.copy(this.sim.position);p.rotation.copy(this.sim.orientation);
+    this.battle.setPlayerTeam(AIRFIELDS[airfieldIndex].team);
+    const p=this.battle.planes[0];p.homeField=airfieldIndex;p.rear.reset();p.cooldown=0;p.respawnQueued=false;p.generation++;p.previous.copy(this.sim.position);p.rotation.copy(this.sim.orientation);
+    this.flightId=`${this.worldId}:${++this.sortieNumber}`;
     this.started=true;this.previewField=null;this.world.updateBuildings(this.battle.buildings);return true;
   }
   private releaseAircraft(){
@@ -430,7 +432,7 @@ export class FlightGame {
     this.frame = requestAnimationFrame(this.animate);
     const elapsed = this.last ? Math.min((now - this.last) / 1000, .1) : 0; this.last = now;
     if (elapsed > 0) this.fps += (1 / elapsed - this.fps) * .04;
-    const active = this.started && this.previewField===null && !this.paused && !document.hidden && !this.battle.winner;
+    const active = this.started && this.previewField===null && !this.paused && !document.hidden;
     if (active) {
       this.yaw = turnHeadYaw(this.yaw,(this.keys.has('a') ? 1 : 0) - (this.keys.has('d') ? 1 : 0),elapsed);
       this.pitch = clamp(this.pitch + ((this.keys.has('w') ? 1 : 0) - (this.keys.has('s') ? 1 : 0)) * elapsed*1.65, -1.05, .85);
@@ -494,12 +496,13 @@ export class FlightGame {
     if (this.audio&&this.gain&&this.oscillators.length) {const base=18+this.sim.rpm/29,rough=1-this.sim.health*.65-this.sim.mixtureEfficiency*.18;this.oscillators[0].frequency.setTargetAtTime(base,this.audio.currentTime,.08);this.oscillators[1].frequency.setTargetAtTime(base*2.01+(this.sim.aircraftType==='bomber'?1.8:0),this.audio.currentTime,.1);this.oscillators[2].frequency.setTargetAtTime(base*.503,this.audio.currentTime,.14);if(this.noiseGain)this.noiseGain.gain.setTargetAtTime(.09+c.throttle*.08+Math.max(0,rough)*.14,this.audio.currentTime,.12);this.gain.gain.setTargetAtTime(active&&this.sim.engine!=='off'&&!this.sim.crashed?.075+c.throttle*.055:0,this.audio.currentTime,.12);}
     if (now - this.reportTime > 120) {
       this.reportTime = now; const s = this.sim;
-      const status = this.battle.winner ? `${this.battle.winner} · MATCH COMPLETE` : s.crashed ? `CRASHED · ${s.crashCause || 'IMPACT'} · ENTER HANGAR` : this.gun.roundsRemaining === 0 ? 'GUN EMPTY · ENTER HANGAR TO REARM' : this.gun.jammed ? 'GUN JAMMED · CYCLE COCKING HANDLE' : this.gun.heat > .72 ? 'GUN HOT · DISPERSION INCREASING' : Math.max(Math.abs(s.position.x),Math.abs(s.position.z))>4800?'MAP EDGE · TURN BACK':s.stall ? 'STALL · LOWER THE NOSE' : s.temperature > 110 ? 'ENGINE HOT · OPEN RADIATOR' : s.grounded ? (s.engine === 'off' ? 'PARKED · ENGINE OFF' : c.brake ? 'ENGINE ' + s.engine.toUpperCase() + ' · BRAKE SET' : 'GROUND ROLL · TEAM BATTLE') : 'AIRBORNE · TEAM BATTLE';
+      const status = s.crashed ? `CRASHED · ${s.crashCause || 'IMPACT'} · ENTER HANGAR` : this.gun.roundsRemaining === 0 ? 'GUN EMPTY · ENTER HANGAR TO REARM' : this.gun.jammed ? 'GUN JAMMED · CYCLE COCKING HANDLE' : this.gun.heat > .72 ? 'GUN HOT · DISPERSION INCREASING' : Math.max(Math.abs(s.position.x),Math.abs(s.position.z))>4800?'MAP EDGE · TURN BACK':s.stall ? 'STALL · LOWER THE NOSE' : s.temperature > 110 ? 'ENGINE HOT · OPEN RADIATOR' : s.grounded ? (s.engine === 'off' ? 'PARKED · ENGINE OFF' : c.brake ? 'ENGINE ' + s.engine.toUpperCase() + ' · BRAKE SET' : 'GROUND ROLL · OPEN AIRSPACE') : 'AIRBORNE · OPEN AIRSPACE';
       const control = [...this.drags.values()][0]?.name ?? this.hover;
       const value = control === 'yoke' ? `PITCH ${Math.round(c.pitch * 100)}% · ROLL ${Math.round(c.roll * 100)}%` : control === 'ignition' ? c.ignition ? 'ON' : 'OFF' : control === 'brake' ? c.brake ? 'SET — CLICK TO RELEASE' : 'RELEASED' : control === 'trigger' ? this.gun.roundsRemaining === 0 ? 'EMPTY' : this.gun.jammed ? 'JAMMED' : this.gun.cocked ? `READY · ${this.gun.roundsRemaining} ROUNDS` : 'NOT COCKED' : control === 'cocking' ? `${this.gun.cocked ? 'ACTION READY' : 'PULL DOWN FULLY'} · ${Math.round(this.cockTravel * 100)}%` : control === 'bomb' ? `${s.bombsRemaining} REMAINING · CLICK TO RELEASE` : control ? Math.round(c[control] * 100) + '%' : '';
-      const hint = control ? `${control.toUpperCase()} · ${value}${control==='mixture'||control==='radiator'?' · WIND CLOCKWISE TO INCREASE':control==='throttle'||control==='yoke'?' · DRAG TO ADJUST':control==='cocking'?' · DRAG DOWN AND RELEASE':''}` : s.crashed ? 'Enter the hangar to choose another aircraft. Your team score is retained.' : this.gun.roundsRemaining === 0 ? 'Ammunition exhausted. Enter the hangar to rearm.' : this.gun.jammed ? 'The gun has jammed. Drag the brass cocking handle fully down, then release.' : !this.gun.cocked ? 'Cock the gun once: drag its brass side handle fully down, then release.' : !c.ignition ? 'Click IGNITION in the cockpit to start your engine.' : c.brake && s.grounded ? 'Release BRAKE, then drag THROTTLE upward.' : 'Sight through the ring and bead · Hold the gun trigger to fire';
+      const hint = control ? `${control.toUpperCase()} · ${value}${control==='mixture'||control==='radiator'?' · WIND CLOCKWISE TO INCREASE':control==='throttle'||control==='yoke'?' · DRAG TO ADJUST':control==='cocking'?' · DRAG DOWN AND RELEASE':''}` : s.crashed ? 'Enter the hangar to choose another aircraft or airfield.' : this.gun.roundsRemaining === 0 ? 'Ammunition exhausted. Enter the hangar to rearm.' : this.gun.jammed ? 'The gun has jammed. Drag the brass cocking handle fully down, then release.' : !this.gun.cocked ? 'Cock the gun once: drag its brass side handle fully down, then release.' : !c.ignition ? 'Click IGNITION in the cockpit to start your engine.' : c.brake && s.grounded ? 'Release BRAKE, then drag THROTTLE upward.' : 'Sight through the ring and bead · Hold the gun trigger to fire';
       const attitude=readAttitude(s.orientation);
-      this.report(status, hint, `${this.fps.toFixed(0)} FPS · 60 Hz physics\nALT ${s.position.y.toFixed(1)} m  IAS ${(s.indicatedAirspeed * 3.6).toFixed(1)} km/h  LIMIT ${s.spec.overspeed} km/h\nAoA ${(s.alpha * 180 / Math.PI).toFixed(1)}°  LOAD ${s.loadFactor.toFixed(2)} g  V/S ${s.velocity.y.toFixed(1)} m/s\nLIFT ${s.lift.toFixed(0)} N  DRAG ${s.drag.toFixed(0)} N\nQ ${s.dynamicPressure.toFixed(0)} Pa  ELEV ${(s.effectiveElevator*100).toFixed(0)}%  RADIATOR DRAG ${s.radiatorDrag.toFixed(0)} N\nGROUND LOAD ${(s.groundLoad/9.81).toFixed(2)} g  PROP CLEAR ${Number.isFinite(s.propClearance)?s.propClearance.toFixed(2):'—'} m\nROLL ${(attitude.roll*180/Math.PI).toFixed(0)}° PITCH ${(attitude.pitch*180/Math.PI).toFixed(0)}°\nRPM ${s.rpm.toFixed(0)}  TEMP ${s.temperature.toFixed(1)}°C\nGUN ${this.gun.jammed?'JAMMED':this.gun.cocked?'READY':'SAFE'}  HEAT ${(this.gun.heat*100).toFixed(0)}%  AMMO ${this.gun.roundsRemaining}/${AMMO_CAPACITY}\nFUEL ${s.fuel.toFixed(1)} L  ENGINE ${(s.health * 100).toFixed(0)}%\nPOS ${s.position.x.toFixed(0)}, ${s.position.z.toFixed(0)}`,{started:this.started,canHangar:this.canHangar(),aircraftType:s.aircraftType,airfieldIndex:this.airfieldIndex,x:s.position.x,z:s.position.z,heading:-new T.Euler().setFromQuaternion(s.orientation,'YXZ').y*180/Math.PI,altitude:s.position.y,crashed:s.crashed,battle:this.battle.info()});
+      const altitudeAboveGround=Math.max(0,s.position.y-this.terrain.heightAt(s.position.x,s.position.z)-1.15);
+      this.report(status, hint, `${this.fps.toFixed(0)} FPS · 60 Hz physics\nALT ${s.position.y.toFixed(1)} m  IAS ${(s.indicatedAirspeed * 3.6).toFixed(1)} km/h  LIMIT ${s.spec.overspeed} km/h\nAoA ${(s.alpha * 180 / Math.PI).toFixed(1)}°  LOAD ${s.loadFactor.toFixed(2)} g  V/S ${s.velocity.y.toFixed(1)} m/s\nLIFT ${s.lift.toFixed(0)} N  DRAG ${s.drag.toFixed(0)} N\nQ ${s.dynamicPressure.toFixed(0)} Pa  ELEV ${(s.effectiveElevator*100).toFixed(0)}%  RADIATOR DRAG ${s.radiatorDrag.toFixed(0)} N\nGROUND LOAD ${(s.groundLoad/9.81).toFixed(2)} g  PROP CLEAR ${Number.isFinite(s.propClearance)?s.propClearance.toFixed(2):'—'} m\nROLL ${(attitude.roll*180/Math.PI).toFixed(0)}° PITCH ${(attitude.pitch*180/Math.PI).toFixed(0)}°\nRPM ${s.rpm.toFixed(0)}  TEMP ${s.temperature.toFixed(1)}°C\nGUN ${this.gun.jammed?'JAMMED':this.gun.cocked?'READY':'SAFE'}  HEAT ${(this.gun.heat*100).toFixed(0)}%  AMMO ${this.gun.roundsRemaining}/${AMMO_CAPACITY}\nFUEL ${s.fuel.toFixed(1)} L  ENGINE ${(s.health * 100).toFixed(0)}%\nPOS ${s.position.x.toFixed(0)}, ${s.position.z.toFixed(0)}`,{started:this.started,flightId:this.flightId,canHangar:this.canHangar(),aircraftType:s.aircraftType,airfieldIndex:this.airfieldIndex,x:s.position.x,z:s.position.z,heading:-new T.Euler().setFromQuaternion(s.orientation,'YXZ').y*180/Math.PI,altitude:s.position.y,altitudeAboveGround,grounded:s.grounded,crashed:s.crashed,battle:this.battle.info()});
     }
   };
   dispose() {

@@ -51,7 +51,9 @@ export class BattleView {
       let halo=this.halos.get(p.id);
       if(!halo){halo=new T.Mesh(new T.PlaneGeometry(2,2),new T.ShaderMaterial({transparent:true,depthWrite:false,blending:T.AdditiveBlending,uniforms:{color:{value:new T.Color(p.team===this.battle.playerTeam?'#35ff67':'#ff352b')},strength:{value:.06}},vertexShader:'varying vec2 vUv; void main(){vUv=uv;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}',fragmentShader:'varying vec2 vUv; uniform vec3 color; uniform float strength; void main(){float r=length(vUv*2.0-1.0);float a=exp(-pow((r-0.72)/0.12,2.0))*strength;gl_FragColor=vec4(color,a);}'}));this.root.add(halo);this.halos.set(p.id,halo);}
       halo.visible=!p.sim.crashed&&!!camera;halo.position.lerpVectors(p.previous,p.sim.position,alpha);
-      if(camera){const distance=camera.position.distanceTo(halo.position);halo.quaternion.copy(camera.quaternion);halo.scale.setScalar(Math.max(p.sim.spec.span*.58,distance*.006));(halo.material as T.ShaderMaterial).uniforms.strength.value=haloStrength(distance);}
+      const haloUniforms=(halo.material as T.ShaderMaterial).uniforms;
+      haloUniforms.color.value.set(p.team===this.battle.playerTeam?'#35ff67':'#ff352b');
+      if(camera){const distance=camera.position.distanceTo(halo.position);halo.quaternion.copy(camera.quaternion);halo.scale.setScalar(Math.max(p.sim.spec.span*.58,distance*.006));haloUniforms.strength.value=haloStrength(distance);}
       if(m.generation!==p.generation){m.effects.reset();m.g.visible=true;m.generation=p.generation;}
       m.g.position.lerpVectors(p.previous,p.sim.position,alpha);m.g.quaternion.slerpQuaternions(p.rotation,p.sim.orientation,alpha);
       for(const spinner of m.prop.children)spinner.rotation.z+=p.sim.rpm*Math.PI/30*dt;m.bombs.forEach((b,i)=>b.visible=i>=p.sim.spec.bombs-p.sim.bombsRemaining);
