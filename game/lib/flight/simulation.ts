@@ -3,7 +3,7 @@ import { SceneryCollisions } from './collisions';
 import { AIRCRAFT, AircraftType } from './aircraft';
 export const DT = 1 / 60;
 export const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
-export const SPEC = { dryMass: 675, wingArea: 25, fuel: 110, stallAngle: .28, groundHeight: 1.15, maxRpm: 1900 };
+export const SPEC = { dryMass: 675, wingArea: 25, fuel: 55, stallAngle: .28, groundHeight: 1.15, maxRpm: 1900 };
 export function coefficients(alpha: number) {
   const blend = clamp((Math.abs(alpha) - .24) / .16, 0, 1);
   const cl = (.24 + 4.7 * alpha) * (1 - blend) + Math.sin(2 * alpha) * .65 * blend;
@@ -85,7 +85,7 @@ export class FlightSimulation {
     this.rpm = clamp(this.rpm + (engineTorque - propTorque - omega * .055) / 6 * dt * 30 / Math.PI, 0, 2450);
     if (running && this.mixtureEfficiency < .08) this.engine = 'off';
     this.thrust = (running ? this.spec.thrust : 0) * (this.rpm / 1850) ** 2 / (1 + (this.airspeed / 45) ** 2);
-    if (running) this.fuel = Math.max(0, this.fuel - (.0007 + c.throttle * .007) * this.spec.torque/470 * dt);
+    if (running) this.fuel = Math.max(0, this.fuel - 2 * (.0007 + c.throttle * .007) * this.spec.torque/470 * dt);
     const heating = running ? .16 + c.throttle * .56 + (1 - this.mixtureEfficiency) * .2 : 0;
     const cooling = (this.temperature - 15) * (.0015 + c.radiator * (.0025 + this.airspeed * .00016));
     this.temperature = Math.max(15, this.temperature + (heating - cooling) * dt);

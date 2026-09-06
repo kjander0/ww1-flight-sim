@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Euler, Vector3, PerspectiveCamera, Quaternion } from 'three';
 import { FlightSimulation, DT, SPEC, coefficients, optimalMixture } from '../lib/flight/simulation';
-import { resolveMouseControl } from '../lib/flight/game';
+import { bombButtonAction, movePilotLateral, resolveMouseControl } from '../lib/flight/game';
 
 function run(s: FlightSimulation, seconds: number, control?: (s: FlightSimulation) => void) {
   for (let i = 0; i < Math.round(seconds / DT); i++) { control?.(s); s.step(); }
@@ -12,6 +12,12 @@ test('an existing mouse-hand binding wins while the other button is held',()=>{
   assert.equal(resolveMouseControl('yoke','trigger',false),'yoke');
   assert.equal(resolveMouseControl('trigger',null,true),'trigger');
 });
+test('pilot can slide laterally within cockpit limits',()=>{
+  assert.equal(movePilotLateral(0,-1,.5),-.24);assert.equal(movePilotLateral(0,1,.5),.24);assert.equal(movePilotLateral(.3,1,1),.38);assert.equal(movePilotLateral(-.3,-1,1),-.38);
+});
+test('covered bomb release requires one click to open before it can release',()=>{
+  assert.equal(bombButtonAction(false),'open');assert.equal(bombButtonAction(true),'release');
+});
 function airborne() { const s = new FlightSimulation(); s.windEnabled = false; s.position.set(0, 500, 0); s.velocity.set(0, 0, -40); s.grounded = false; return s; }
 test('parked aircraft stays on its gear, engine off and full throttle with brake set', () => {
   const s = new FlightSimulation(); run(s, 60); assert.equal(s.position.y, SPEC.groundHeight); assert.ok(s.position.distanceTo(new Vector3(0, SPEC.groundHeight, 330)) < .1);
@@ -19,6 +25,10 @@ test('parked aircraft stays on its gear, engine off and full throttle with brake
 });
 test('sustained bad mixture damages a running engine',()=>{
   const s=airborne();s.controls.ignition=true;s.controls.throttle=.7;s.controls.mixture=.55;s.engine='running';s.rpm=1600;const health=s.health;run(s,4);assert.ok(s.mixtureEfficiency<.55);assert.ok(s.health<health);
+});
+test('fuel tanks are halved and running fuel burn is doubled',()=>{
+  const s=new FlightSimulation();assert.equal(s.spec.fuel,55);assert.equal(s.fuel,55);s.aircraftType='fighter';s.reset();assert.equal(s.fuel,62.5);s.aircraftType='bomber';s.reset();assert.equal(s.fuel,105);
+  s.aircraftType='scout';s.reset();s.position.set(0,500,0);s.velocity.set(0,0,-40);s.grounded=false;s.controls.ignition=true;s.controls.throttle=1;s.controls.mixture=optimalMixture(500);s.engine='running';const fuel=s.fuel;run(s,1);assert.ok(Math.abs((fuel-s.fuel)-.0154)<1e-6);
 });
 test('takeoff from a standing start before the runway end, followed by a stable climb', t => {
   const s = new FlightSimulation(); s.windEnabled = false; s.controls.ignition = true; s.controls.throttle = 1; s.controls.brake = false;

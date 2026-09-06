@@ -16,7 +16,10 @@ type Control = 'throttle' | 'mixture' | 'radiator' | 'yoke' | 'ignition' | 'brak
 type Gauge = { needle: T.Group; max: number; read: () => number };
 type MouseButton=0|2;
 type Drag={name:Control;x:number;y:number;initial:number;pitch:number;roll:number;id?:number;grabOffset:T.Vector2;direct:boolean;wheel?:WheelWinder};
+const PILOT_FORWARD_OFFSET=1.0;
 export function resolveMouseControl<T>(picked:T|null,bound:T|null,chording:boolean){return chording&&bound?bound:picked??bound;}
+export function movePilotLateral(current:number,input:number,dt:number){return clamp(current+input*dt*.48,-.38,.38);}
+export function bombButtonAction(coverOpen:boolean):'open'|'release'{return coverOpen?'release':'open';}
 export class FlightGame {
   private started=false;
   private previewField:number|null=0;
@@ -32,8 +35,8 @@ export class FlightGame {
   paused = false;
   private renderer: T.WebGLRenderer;
   private scene = new T.Scene(); private cockpit = new T.Scene(); private aircraft = new T.Group();
-  private camera = new T.PerspectiveCamera(60, 1, .025, 12000);
-  private target = new T.WebGLRenderTarget(640, 360, { minFilter: T.NearestFilter, magFilter: T.NearestFilter });
+  private camera = new T.PerspectiveCamera(70, 1, .025, 7000);
+  private target = new T.WebGLRenderTarget(1067, 600, { minFilter: T.NearestFilter, magFilter: T.NearestFilter });
   private screen = new T.Scene(); private screenCamera = new T.OrthographicCamera(-1, 1, 1, -1, 0, 1);
   private ray = new T.Raycaster(); private pointer = new T.Vector2();
   private hits: T.Object3D[] = []; private gauges: Gauge[] = [];
@@ -44,21 +47,21 @@ export class FlightGame {
   private handAnchors:Partial<Record<Control,T.Object3D>>={};
   private dragTarget = new T.Vector2();
   private hover: Control | null = null;
-  private yaw = 0; private pitch = -.23; private frame = 0; private last = 0; private accumulator = 0; private reportTime = 0;
+  private yaw = 0; private pitch = -.23;private pilotLateral=0; private frame = 0; private last = 0; private accumulator = 0; private reportTime = 0;
   private prevPosition = new T.Vector3(); private prevRotation = new T.Quaternion(); private look = new T.Quaternion();
   private propeller = new T.Group(); private resizeObserver: ResizeObserver;
   private labels: T.Texture[] = []; private fps = 60;
   readonly gun = new MachineGun();
-  private gunTrigger = new T.Group(); private cockingHandle = new T.Group(); private cockTravel = 0; private gunRecoil = 0; private shownRounds = 0;private shownAmmo=-1;private ammoTexture:T.CanvasTexture|null=null;
+  private gunTrigger = new T.Group(); private cockingHandle = new T.Group(); private cockTravel = 0;private cockRatchet=0; private gunRecoil = 0; private shownRounds = 0;private shownAmmo=-1;private ammoTexture:T.CanvasTexture|null=null;private bombCover=new T.Group();private bombCoverOpen=false;private bombHand:MouseButton|null=null;private heardBlasts=new Set<number>();
   private tracerGeometry = new T.BoxGeometry(1, 1, 1); private tracers: T.InstancedMesh;
   private toolLifecycle = new AbortController();
-  private audio: AudioContext | null = null; private oscillators: OscillatorNode[] = []; private gain: GainNode | null = null; private engineNoise: AudioBufferSourceNode | null=null;private noiseGain:GainNode|null=null;private noiseBuffer:AudioBuffer|null=null;
+  private audio: AudioContext | null = null; private oscillators: OscillatorNode[] = []; private gain: GainNode | null = null; private engineNoise: AudioBufferSourceNode | null=null;private noiseGain:GainNode|null=null;private noiseBuffer:AudioBuffer|null=null;private blastNoiseBuffer:AudioBuffer|null=null;
   constructor(private mount: HTMLElement, private report: (status: string, hint: string, telemetry: string, info:FlightInfo) => void) {
     this.renderer = new T.WebGLRenderer({ antialias: false, powerPreference: 'high-performance' });
     this.renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
     this.renderer.autoClear = false; this.renderer.outputColorSpace = T.SRGBColorSpace;
     this.renderer.domElement.tabIndex = 0;
-    this.renderer.domElement.setAttribute('aria-label', 'Flight simulator. WASD looks around. All aircraft controls are operated in the cockpit. Left and right mouse buttons each bind a hand to a cockpit control; repeat that button to reuse its control.');
+    this.renderer.domElement.setAttribute('aria-label', 'Flight simulator. WASD looks around; Q and E slide the pilot left and right within the cockpit. All aircraft controls are operated in the cockpit. Left and right mouse buttons each bind a hand to a cockpit control; repeat that button to reuse its control.');
     mount.appendChild(this.renderer.domElement);
     this.scene.background = new T.Color('#abb9a4'); this.scene.fog = new T.Fog('#abb9a4', 1600, 6500);
     for (const scene of [this.scene, this.cockpit]) {
@@ -123,7 +126,7 @@ export class FlightGame {
     }
     if(this.sim.aircraftType==='bomber'){
       for(const x of[-spec.span*.18,spec.span*.18]){
-        this.box(this.aircraft,[.9,.72,2.1],[x,.38,-1.72],olive);
+        this.box(this.aircraft,[.72,.58,1.72],[x,.38,-1.72],olive);
       }
       const ring=new T.Mesh(new T.TorusGeometry(.42,.045,6,18),dark);ring.rotation.x=Math.PI/2;ring.position.set(0,.11,2.35);this.aircraft.add(ring);
       this.box(this.aircraft,[.32,.46,.24],[0,.24,2.35],this.material('#534735'));
@@ -177,12 +180,13 @@ export class FlightGame {
       this.hit(name, .76, y, -.38, .2, .16);
     }
     this.propeller.position.set(0,0,0);
-    if(this.sim.aircraftType==='bomber')for(const x of[-spec.span*.18,spec.span*.18]){const spinner=new T.Group();spinner.position.set(x,.38,-2.82);this.propeller.add(spinner);this.box(spinner,[.13,2,.08],[0,0,0],timber);}
+    if(this.sim.aircraftType==='bomber')for(const x of[-spec.span*.18,spec.span*.18]){const spinner=new T.Group();spinner.position.set(x,.38,-2.65);this.propeller.add(spinner);this.box(spinner,[.12,1.8,.07],[0,0,0],timber);}
     else {const spinner=new T.Group();spinner.position.set(0,0,-3.52);this.propeller.add(spinner);this.box(spinner,[.13,1.8,.08],[0,0,0],timber);}
     this.aircraft.add(this.propeller);
     this.buildGun(dark, brass, timber);
     if(spec.bombs>0){this.label('BOMB RELEASE',-.48,-.46,-.32,.30);
-    const release=new T.Group();release.position.set(-.48,-.55,-.27);this.box(release,[.12,.065,.045],[0,0,0],this.material('#ad5d34'));this.aircraft.add(release);this.knobs.bomb=release;this.hit('bomb',-.48,-.55,-.23,.22,.11);}
+    const release=new T.Group();release.position.set(-.48,-.55,-.27);this.box(release,[.12,.065,.045],[0,0,0],this.material('#ad5d34'));this.aircraft.add(release);this.knobs.bomb=release;this.hit('bomb',-.48,-.55,-.23,.22,.11);
+    this.bombCover=new T.Group();this.bombCover.position.set(-.48,-.48,-.235);this.box(this.bombCover,[.17,.14,.028],[0,-.07,0],this.material('#586057'));this.rod(this.bombCover,[-.1,0,0],[.1,0,0],.014,brass);this.aircraft.add(this.bombCover);}
     this.buildHands();
   }
 
@@ -270,10 +274,10 @@ export class FlightGame {
   private down = (e: MouseEvent) => {
     if ((e.button!==0&&e.button!==2)||this.paused||this.sim.crashed)return;
     const button=e.button as MouseButton;
-    this.renderer.domElement.focus();this.startAudio();const picked=this.pick(e),chording=this.drags.size>0&&!this.drags.has(button),name=resolveMouseControl(picked,this.bindings[button],chording);if(!name)return;if(name===picked)this.bindings[button]=name;e.preventDefault();this.playClick(name==='trigger'?'trigger':'light');
+    this.renderer.domElement.focus();this.startAudio();const picked=this.pick(e),chording=this.drags.size>0&&!this.drags.has(button),name=resolveMouseControl(picked,this.bindings[button],chording);if(!name)return;if(name===picked)this.bindings[button]=name;e.preventDefault();if(this.bombHand===button&&name!=='bomb'){this.bombCoverOpen=false;this.bombHand=null;}if(name==='cocking'){this.cockRatchet=0;this.playRatchet(0);}else this.playClick(name==='trigger'?'trigger':'light');
     this.placeHand(button,name);
     if (name === 'ignition' || name === 'brake') { this.sim.controls[name] = !this.sim.controls[name]; return; }
-    if (name === 'bomb') {this.releaseBomb(false);return;}
+    if (name === 'bomb') {this.bombHand=button;if(bombButtonAction(this.bombCoverOpen)==='open'){this.bombCoverOpen=true;return;}this.releaseBomb(false);return;}
     const grabOffset = new T.Vector2();
     if (name === 'throttle'&&!!picked) {
       const rect = this.renderer.domElement.getBoundingClientRect();
@@ -297,7 +301,7 @@ export class FlightGame {
       } else if(d.name==='throttle')this.sim.controls.throttle=clamp(d.initial-(e.clientY-d.y)/scale,0,1);
       else if ((d.name === 'mixture' || d.name === 'radiator')&&d.wheel) {this.pick(e);this.sim.controls[d.name]=d.wheel.update(this.wheelAngle(d.name),this.sim.controls[d.name]);}
       else if(d.name==='mixture'||d.name==='radiator')this.sim.controls[d.name]=clamp(d.initial-(e.clientY-d.y)/scale,0,1);
-      else if (d.name === 'cocking') { const was=this.cockTravel;this.cockTravel = clamp((e.clientY - d.y) / Math.max(65, this.mount.clientHeight * .12), 0, 1); if (this.cockTravel >= .92){this.gun.cock();if(was<.92)this.playClick('heavy');} }
+      else if (d.name === 'cocking') { const was=this.cockTravel;this.cockTravel = clamp((e.clientY - d.y) / Math.max(65, this.mount.clientHeight * .12), 0, 1);const tooth=Math.floor(this.cockTravel*7);if(tooth!==this.cockRatchet&&this.cockTravel<.92){this.cockRatchet=tooth;this.playRatchet(tooth);}if(this.cockTravel >= .92){this.gun.cock();if(was<.92)this.playCocking();} }
      }
     } else this.hover = this.pick(e);
     this.renderer.domElement.style.cursor = this.drags.size ? 'grabbing' : this.hover ? 'grab' : 'default';
@@ -309,19 +313,19 @@ export class FlightGame {
   private touchUp=(e:PointerEvent)=>{if(e.pointerType!=='mouse')this.up(e);};
   private keydown = (e: KeyboardEvent) => {
     if (this.paused || (e.target instanceof HTMLElement && ['INPUT', 'TEXTAREA', 'BUTTON'].includes(e.target.tagName))) return;
-    const k = e.key.toLowerCase(); if (!'wasd'.includes(k) || k.length !== 1) return; e.preventDefault(); this.keys.add(k);
+    const k = e.key.toLowerCase(); if (!'wasdqe'.includes(k) || k.length !== 1) return; e.preventDefault(); this.keys.add(k);
   };
   private keyup = (e: KeyboardEvent) => { this.keys.delete(e.key.toLowerCase()); };
   private blur = () => { this.keys.clear(); this.up(); };
   private visibility = () => { this.blur(); this.last = 0; this.accumulator = 0; if (document.hidden && this.audio && this.gain) this.gain.gain.setTargetAtTime(0, this.audio.currentTime, .04); };
-  private resize = () => { const w = this.mount.clientWidth, h = this.mount.clientHeight; this.renderer.setSize(w, h); this.target.setSize(Math.round(420 * w / h), 420); this.camera.aspect = w / h; this.camera.fov = w / h < 1.3 ? 75 : 60; this.camera.updateProjectionMatrix(); };
+  private resize = () => { const w = this.mount.clientWidth, h = this.mount.clientHeight; this.renderer.setSize(w, h); this.target.setSize(Math.round(600 * w / h), 600); this.camera.aspect = w / h; this.camera.fov = w / h < 1.3 ? 75 : 70; this.camera.updateProjectionMatrix(); };
   private setSpawn(){this.sim.spawn.copy(parkingPosition(this.terrain,this.airfieldIndex));}
   releaseBomb(sound=true){if(this.paused||this.battle.winner)return;if(sound){this.startAudio();this.playClick('heavy');}if(this.battle.release())this.battle.message=`BOMB AWAY · ${this.sim.bombsRemaining} REMAINING`;else if(this.sim.grounded)this.battle.message='BOMB RELEASE · AIRBORNE ONLY';else if(this.sim.bombsRemaining===0)this.battle.message='NO BOMBS · BOMBER CARRIES FOUR';}
   enterHangar(){
     if(!this.started||this.battle.winner)return false;const runway=stoppedRunway(this.sim),safe=runway>=0&&AIRFIELDS[runway].team===this.battle.playerTeam;
     if(!safe)this.battle.retirePlayer();this.blur();return !safe;
   }
-  private resetView() { this.crashEffects.reset();this.aircraft.visible=true;this.propeller.visible=true;this.cockTravel=0;this.gunRecoil=0;this.shownRounds=0; this.prevPosition.copy(this.sim.position); this.prevRotation.copy(this.sim.orientation); this.yaw = 0; this.pitch = -.23; this.accumulator = 0; this.blur();this.hover=null; }
+  private resetView() { this.crashEffects.reset();this.aircraft.visible=true;this.propeller.visible=true;this.cockTravel=0;this.cockRatchet=0;this.gunRecoil=0;this.shownRounds=0;this.bombCoverOpen=false;this.bombHand=null;this.heardBlasts.clear(); this.prevPosition.copy(this.sim.position); this.prevRotation.copy(this.sim.orientation); this.yaw = 0; this.pitch = -.23;this.pilotLateral=0; this.accumulator = 0; this.blur();this.hover=null; }
   startSortie(type:AircraftType,airfieldIndex:number){
     if(!(type in AIRCRAFT)||!Number.isInteger(airfieldIndex)||airfieldIndex<0||airfieldIndex>=AIRFIELDS.length)throw new Error('Invalid aircraft or airfield');
     const fresh=!this.started||!!this.battle.winner;
@@ -335,7 +339,7 @@ export class FlightGame {
   }
   private releaseAircraft(){
     const geometries=new Set<T.BufferGeometry>(),materials=new Set<T.Material>();this.aircraft.traverse(o=>{if(o instanceof T.Mesh){geometries.add(o.geometry);for(const m of Array.isArray(o.material)?o.material:[o.material])materials.add(m);}});
-    geometries.forEach(g=>g.dispose());materials.forEach(m=>m.dispose());this.labels.forEach(t=>t.dispose());this.labels=[];this.aircraft.clear();this.gauges=[];this.hits=[];this.knobs={};this.bombRacks.length=0;this.propeller=new T.Group();this.gunTrigger=new T.Group();this.cockingHandle=new T.Group();this.attitude=null;this.ammoTexture=null;this.shownAmmo=-1;
+    geometries.forEach(g=>g.dispose());materials.forEach(m=>m.dispose());this.labels.forEach(t=>t.dispose());this.labels=[];this.aircraft.clear();this.gauges=[];this.hits=[];this.knobs={};this.bombRacks.length=0;this.propeller=new T.Group();this.gunTrigger=new T.Group();this.cockingHandle=new T.Group();this.bombCover=new T.Group();this.attitude=null;this.ammoTexture=null;this.shownAmmo=-1;
   }
   private startAudio() {
     if (!this.audio) {
@@ -343,6 +347,7 @@ export class FlightGame {
       const filter=this.audio.createBiquadFilter();filter.type='lowpass';filter.frequency.value=520;filter.Q.value=.7;filter.connect(this.gain);
       for(const [type,level] of [['sawtooth',.42],['square',.11],['triangle',.24]] as const){const oscillator=this.audio.createOscillator(),g=this.audio.createGain();oscillator.type=type;g.gain.value=level;oscillator.connect(g);g.connect(filter);oscillator.start();this.oscillators.push(oscillator);}
       this.noiseBuffer=this.audio.createBuffer(1,this.audio.sampleRate*2,this.audio.sampleRate);const data=this.noiseBuffer.getChannelData(0);let brown=0;for(let i=0;i<data.length;i++){brown=(brown+(Math.random()*2-1)*.16)/1.02;data[i]=brown*.65;}
+      this.blastNoiseBuffer=this.audio.createBuffer(1,this.audio.sampleRate*2,this.audio.sampleRate);const blastData=this.blastNoiseBuffer.getChannelData(0);for(let i=0;i<blastData.length;i++)blastData[i]=Math.random()*2-1;
       this.engineNoise=this.audio.createBufferSource();this.engineNoise.buffer=this.noiseBuffer;this.engineNoise.loop=true;this.noiseGain=this.audio.createGain();const noiseFilter=this.audio.createBiquadFilter();noiseFilter.type='bandpass';noiseFilter.frequency.value=135;noiseFilter.Q.value=.8;this.noiseGain.gain.value=.13;this.engineNoise.connect(noiseFilter);noiseFilter.connect(this.noiseGain);this.noiseGain.connect(filter);this.engineNoise.start();
     }
     void this.audio.resume();
@@ -351,8 +356,30 @@ export class FlightGame {
     if(!this.audio)return;const now=this.audio.currentTime,osc=this.audio.createOscillator(),gain=this.audio.createGain(),filter=this.audio.createBiquadFilter();filter.type='bandpass';filter.Q.value=2.5;
     const heavy=weight==='heavy';osc.type=weight==='trigger'?'square':'triangle';osc.frequency.setValueAtTime(heavy?135:weight==='trigger'?410:270,now);osc.frequency.exponentialRampToValueAtTime(heavy?58:110,now+.035);filter.frequency.value=heavy?520:1100;gain.gain.setValueAtTime(heavy?.12:.07,now);gain.gain.exponentialRampToValueAtTime(.0001,now+(heavy?.085:.045));osc.connect(filter);filter.connect(gain);gain.connect(this.audio.destination);osc.start(now);osc.stop(now+(heavy?.09:.05));
   }
+  private mechanicalNoise(when:number,duration:number,frequency:number,q:number,volume:number,type:BiquadFilterType='bandpass'){
+    if(!this.audio||!this.noiseBuffer)return;const source=this.audio.createBufferSource(),filter=this.audio.createBiquadFilter(),gain=this.audio.createGain();source.buffer=this.noiseBuffer;source.playbackRate.value=.8+Math.random()*.35;filter.type=type;filter.frequency.value=frequency;filter.Q.value=q;gain.gain.setValueAtTime(volume,when);gain.gain.exponentialRampToValueAtTime(.0001,when+duration);source.connect(filter);filter.connect(gain);gain.connect(this.audio.destination);source.start(when,Math.random(),duration+.012);
+  }
+  private playRatchet(tooth:number){
+    if(!this.audio)return;const now=this.audio.currentTime;this.mechanicalNoise(now,.026,760+tooth*55,1.1,.075);this.mechanicalNoise(now+.006,.012,2050-tooth*45,2.8,.105,'highpass');
+  }
+  private playCocking(){
+    if(!this.audio)return;const now=this.audio.currentTime;this.mechanicalNoise(now,.065,390,.7,.22,'lowpass');this.mechanicalNoise(now+.008,.028,1850,2.2,.13,'highpass');
+    // Quiet, inharmonic resonances suggest steel ringing without forming a musical interval.
+    for(const [frequency,volume,decay]of[[1687,.026,.085],[2311,.018,.12]] as const){const tone=this.audio.createOscillator(),gain=this.audio.createGain();tone.type='sine';tone.frequency.value=frequency;gain.gain.setValueAtTime(volume,now+.012);gain.gain.exponentialRampToValueAtTime(.0001,now+.012+decay);tone.connect(gain);gain.connect(this.audio.destination);tone.start(now+.012);tone.stop(now+.025+decay);}
+  }
   private playGunshot(heat:number){
-    if(!this.audio||!this.noiseBuffer)return;const now=this.audio.currentTime,source=this.audio.createBufferSource(),filter=this.audio.createBiquadFilter(),gain=this.audio.createGain(),crack=this.audio.createOscillator(),crackGain=this.audio.createGain();source.buffer=this.noiseBuffer;source.playbackRate.value=.78-heat*.2+Math.random()*.08;filter.type='bandpass';filter.frequency.value=720-heat*330;filter.Q.value=.65;gain.gain.setValueAtTime(.22+heat*.05,now);gain.gain.exponentialRampToValueAtTime(.0001,now+.075+heat*.045);source.connect(filter);filter.connect(gain);gain.connect(this.audio.destination);crack.type=heat>.65?'sawtooth':'square';crack.frequency.setValueAtTime(115-heat*38+Math.random()*12,now);crack.frequency.exponentialRampToValueAtTime(48,now+.055);crackGain.gain.setValueAtTime(.13,now);crackGain.gain.exponentialRampToValueAtTime(.0001,now+.06);crack.connect(crackGain);crackGain.connect(this.audio.destination);source.start(now,Math.random());source.stop(now+.13);crack.start(now);crack.stop(now+.07);
+    if(!this.audio||!this.noiseBuffer)return;const now=this.audio.currentTime,source=this.audio.createBufferSource(),filter=this.audio.createBiquadFilter(),gain=this.audio.createGain(),body=this.audio.createOscillator(),bodyGain=this.audio.createGain(),crack=this.audio.createOscillator(),crackGain=this.audio.createGain();source.buffer=this.noiseBuffer;source.playbackRate.value=.82-heat*.22+Math.random()*.08;filter.type='bandpass';filter.frequency.value=880-heat*390;filter.Q.value=.72;gain.gain.setValueAtTime(.34+heat*.06,now);gain.gain.exponentialRampToValueAtTime(.0001,now+.085+heat*.05);source.connect(filter);filter.connect(gain);gain.connect(this.audio.destination);body.type=heat>.65?'sawtooth':'square';body.frequency.setValueAtTime(105-heat*34+Math.random()*10,now);body.frequency.exponentialRampToValueAtTime(42,now+.065);bodyGain.gain.setValueAtTime(.2,now);bodyGain.gain.exponentialRampToValueAtTime(.0001,now+.075);body.connect(bodyGain);bodyGain.connect(this.audio.destination);crack.type='triangle';crack.frequency.setValueAtTime(1450-heat*420,now);crack.frequency.exponentialRampToValueAtTime(520,now+.022);crackGain.gain.setValueAtTime(.15,now);crackGain.gain.exponentialRampToValueAtTime(.0001,now+.03);crack.connect(crackGain);crackGain.connect(this.audio.destination);source.start(now,Math.random());source.stop(now+.15);body.start(now);body.stop(now+.08);crack.start(now);crack.stop(now+.035);
+  }
+  private playExplosion(distance:number){
+    if(!this.audio||!this.blastNoiseBuffer)return;const now=this.audio.currentTime,level=clamp(1-distance/2000,.05,1),bus=this.audio.createGain(),delay=this.audio.createDelay(1),feedback=this.audio.createGain();bus.gain.value=level;delay.delayTime.value=.29+Math.min(.16,distance/9000);feedback.gain.value=.27;bus.connect(this.audio.destination);bus.connect(delay);delay.connect(this.audio.destination);delay.connect(feedback);feedback.connect(delay);
+    const noise=(when:number,duration:number,frequency:number,q:number,volume:number,type:BiquadFilterType='bandpass')=>{const source=this.audio!.createBufferSource(),filter=this.audio!.createBiquadFilter(),gain=this.audio!.createGain();source.buffer=this.blastNoiseBuffer;filter.type=type;filter.frequency.value=frequency;filter.Q.value=q;gain.gain.setValueAtTime(volume,when);gain.gain.exponentialRampToValueAtTime(.0001,when+duration);source.connect(filter);filter.connect(gain);gain.connect(bus);source.start(when,Math.random()*.35,duration+.01);};
+    // Report, expanding gas roar, then a long granular tail.
+    noise(now,.105,1150,.55,.5,'highpass');noise(now,.82,175,.5,.48,'lowpass');noise(now+.035,1.55,760,.65,.15);
+    const boom=this.audio.createOscillator(),boomGain=this.audio.createGain();boom.type='sine';boom.frequency.setValueAtTime(54,now);boom.frequency.exponentialRampToValueAtTime(19,now+1.2);boomGain.gain.setValueAtTime(.38,now);boomGain.gain.exponentialRampToValueAtTime(.0001,now+1.35);boom.connect(boomGain);boomGain.connect(bus);boom.start(now);boom.stop(now+1.4);
+    for(let i=0;i<14;i++){const t=.08+Math.random()*1.45,fade=1-t/1.7;noise(now+t,.018+Math.random()*.045,1450+Math.random()*2600,1.2+Math.random()*2,.055*fade,'highpass');}
+    // Two softer, darker reports keep the echo from sounding like a single delay tap.
+    noise(now+.42,.32,260,.7,.15,'lowpass');noise(now+.86,.4,210,.65,.08,'lowpass');
+    window.setTimeout(()=>{bus.disconnect();delay.disconnect();feedback.disconnect();},4000);
   }
   private registerTools() {
     type Tool = { name: string; description: string; inputSchema: object; annotations: { readOnlyHint: boolean }; execute: (input: unknown) => unknown };
@@ -392,6 +419,7 @@ export class FlightGame {
     if (active) {
       this.yaw = turnHeadYaw(this.yaw,(this.keys.has('a') ? 1 : 0) - (this.keys.has('d') ? 1 : 0),elapsed);
       this.pitch = clamp(this.pitch + ((this.keys.has('w') ? 1 : 0) - (this.keys.has('s') ? 1 : 0)) * elapsed*1.65, -1.05, .85);
+      this.pilotLateral=movePilotLateral(this.pilotLateral,(this.keys.has('e')?1:0)-(this.keys.has('q')?1:0),elapsed);
       this.accumulator += elapsed;
       while (this.accumulator >= DT) { this.prevPosition.copy(this.sim.position); this.prevRotation.copy(this.sim.orientation); this.battle.step(DT); this.accumulator -= DT; }
     } else { this.accumulator = 0; this.prevPosition.copy(this.sim.position); this.prevRotation.copy(this.sim.orientation); this.blur(); }
@@ -400,21 +428,22 @@ export class FlightGame {
     if(this.previewField!==null)this.aircraft.visible=false;else if(!this.sim.crashed||this.sim.crashCause==='PROP STRIKE')this.aircraft.visible=true;
     if(this.previewField!==null){const f=AIRFIELDS[this.previewField],y=this.terrain.airfieldHeights[this.previewField];this.camera.position.set(f.x+380,y+330,f.z+550);this.camera.lookAt(f.x-70,y,f.z+150);}
     else if(!this.sim.crashed){
-      this.camera.position.set(0,.68,1.3).applyQuaternion(this.aircraft.quaternion).add(this.aircraft.position);this.camera.quaternion.copy(this.aircraft.quaternion).multiply(this.look);
+      this.camera.position.set(this.pilotLateral,.68,PILOT_FORWARD_OFFSET).applyQuaternion(this.aircraft.quaternion).add(this.aircraft.position);this.camera.quaternion.copy(this.aircraft.quaternion).multiply(this.look);
     }else{
       if(!this.crashEffects.active){
         this.aircraft.position.copy(this.sim.position);this.aircraft.quaternion.copy(this.sim.orientation);this.aircraft.updateMatrixWorld(true);
-        this.camera.position.set(0,.68,1.3).applyQuaternion(this.aircraft.quaternion).add(this.aircraft.position);this.camera.quaternion.copy(this.aircraft.quaternion).multiply(this.look);
+        this.camera.position.set(this.pilotLateral,.68,PILOT_FORWARD_OFFSET).applyQuaternion(this.aircraft.quaternion).add(this.aircraft.position);this.camera.quaternion.copy(this.aircraft.quaternion).multiply(this.look);
         if(this.sim.crashCause==='PROP STRIKE')this.crashEffects.detach(this.propeller,this.sim.impactVelocity,this.sim.impactSpeed);
         else {this.crashEffects.start(this.aircraft,this.sim.impactVelocity,this.sim.impactSpeed,this.camera);this.yaw=0;this.pitch=0;this.look.identity();}
         this.up();this.hover=null;
       }
       if(this.sim.crashCause==='PROP STRIKE'){
-        this.camera.position.set(0,.68,1.3).applyQuaternion(this.aircraft.quaternion).add(this.aircraft.position);this.camera.quaternion.copy(this.aircraft.quaternion).multiply(this.look);
+        this.camera.position.set(this.pilotLateral,.68,PILOT_FORWARD_OFFSET).applyQuaternion(this.aircraft.quaternion).add(this.aircraft.position);this.camera.quaternion.copy(this.aircraft.quaternion).multiply(this.look);
         this.crashEffects.update(active?elapsed:0,this.camera);
       }else {this.crashEffects.update(active?elapsed:0,this.camera);this.camera.quaternion.multiply(this.look);}
     }
     this.camera.updateMatrixWorld();
+    const activeBlasts=new Set<number>();for(const blast of this.battle.blasts){activeBlasts.add(blast.id);if(!this.heardBlasts.has(blast.id)){this.heardBlasts.add(blast.id);this.playExplosion(this.camera.position.distanceTo(blast.position));}}if(this.heardBlasts.size>64)for(const id of this.heardBlasts)if(!activeBlasts.has(id))this.heardBlasts.delete(id);
     this.battleView.update(active?elapsed:0,active?this.accumulator/DT:1,this.camera);this.world.updateBuildings(this.battle.buildings);this.bombRacks.forEach((b,i)=>b.visible=i>=this.sim.spec.bombs-this.sim.bombsRemaining);
     for (const g of this.gauges) g.needle.rotation.z = (135 - clamp(g.read() / g.max, 0, 1) * 270) * Math.PI / 180;
     if(this.attitude){const a=readAttitude(this.sim.orientation);this.attitude.uniforms.pitch.value=a.pitch;this.attitude.uniforms.roll.value=a.roll;}
@@ -424,7 +453,8 @@ export class FlightGame {
     this.knobs.yoke!.rotation.z = -c.roll * .6; this.knobs.yoke!.rotation.x = c.pitch * .45;
     this.knobs.ignition!.position.z = c.ignition ? -.47 : -.44; this.knobs.brake!.position.z = c.brake ? -.44 : -.48;
     this.cockTravel = [...this.drags.values()].some(d=>d.name==='cocking') ? this.cockTravel : Math.max(0, this.cockTravel - elapsed * 5);
-    this.cockingHandle.position.z = -.08 + this.cockTravel * .28;
+    const needsCock=this.gun.trigger&&(!this.gun.cocked||this.gun.jammed),shake=needsCock?Math.sin(now*.075)*.014:0;this.cockingHandle.position.set(.14+shake,.08+(needsCock?Math.cos(now*.11)*.009:0),-.08+this.cockTravel*.28);this.cockingHandle.rotation.z=needsCock?Math.sin(now*.13)*.09:0;
+    if(this.bombCover.parent){const targetRotation=this.bombCoverOpen?-2.25:0;this.bombCover.rotation.x+=(targetRotation-this.bombCover.rotation.x)*Math.min(1,elapsed*18);}
     if (this.gun.roundsFired !== this.shownRounds) { this.shownRounds = this.gun.roundsFired; this.gunRecoil = 1;this.playGunshot(this.gun.heat); }
     this.updateAmmoDisplay();
     this.gunRecoil = Math.max(0, this.gunRecoil - elapsed * 18);

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as T from 'three';
 import { haloStrength } from '../lib/flight/battle-view';
-import { Battle, TARGET_SCORE, rackPosition, segmentBox, segmentSphere, terrainHit } from '../lib/flight/battle';
+import { Battle, BLAST_KILL_RADIUS, TARGET_SCORE, rackPosition, segmentBox, segmentSphere, terrainHit, type Bomb, type Plane } from '../lib/flight/battle';
 import { parkingPosition, stoppedRunway, turnHeadYaw } from '../lib/flight/airfield-ops';
 import { Terrain } from '../lib/flight/terrain';
 import { FlightSimulation, DT } from '../lib/flight/simulation';
@@ -44,6 +44,17 @@ test('direct bomb hits destroy enemy hangars/towers once; friendly hits award no
   drop('ALLIED');b.step();assert.equal(target.destroyed,true);assert.equal(b.scores.ALLIED,5);assert.equal(b.bombs.length,0);assert.equal(b.blasts.length,1);
   drop('ALLIED');ticks(b,.1);assert.equal(b.scores.ALLIED,5);
   const friendly=b.buildings.find(t=>t.team==='ALLIED'&&t.kind==='TOWER')!;b.bombs.push({id:1000,team:'ALLIED',position:friendly.position.clone().add(new T.Vector3(0,22,0)),previous:friendly.position.clone(),velocity:new T.Vector3(0,-300,0),age:0});b.step();assert.equal(friendly.destroyed,true);assert.equal(b.scores.ALLIED,5);assert.equal(b.scores.CENTRAL,0);
+});
+test('each airfield has several parked aircraft that bombs and machine guns can score once',()=>{
+  const bombMatch=match(),byField=new Map<string,number>();for(const p of bombMatch.parkedPlanes){const field=p.id.split('-')[1];byField.set(field,(byField.get(field)??0)+1);}assert.deepEqual([...byField.values()],[4,4,4,4]);
+  const bombTarget=bombMatch.parkedPlanes.find(p=>p.team==='CENTRAL')!,bomb:Bomb={id:43,team:'ALLIED',position:bombTarget.position.clone(),previous:bombTarget.position.clone(),velocity:new T.Vector3(0,-30,0),age:1};
+  (bombMatch as unknown as {explode:(bomb:Bomb)=>void}).explode(bomb);assert.equal(bombTarget.destroyed,true);assert.equal(bombMatch.scores.ALLIED,5);(bombMatch as unknown as {explode:(bomb:Bomb)=>void}).explode(bomb);assert.equal(bombMatch.scores.ALLIED,5);
+  const gunMatch=match(),shooter=gunMatch.planes[0],gunTarget=gunMatch.parkedPlanes.find(p=>p.team==='CENTRAL')!,from=gunTarget.position.clone().add(new T.Vector3(0,0,10)),to=gunTarget.position.clone().add(new T.Vector3(0,0,-10));
+  const hit=(gunMatch as unknown as {bulletHit:(shooter:Plane,from:T.Vector3,to:T.Vector3)=>number|null}).bulletHit.bind(gunMatch);for(let i=0;i<6;i++)assert.notEqual(hit(shooter,from,to),null);assert.equal(gunTarget.destroyed,true);assert.equal(gunMatch.scores.ALLIED,5);hit(shooter,from,to);assert.equal(gunMatch.scores.ALLIED,5);
+});
+test('a bomb blast destroys every aircraft inside its lethal radius',()=>{
+  const b=match(),near=b.planes[4],edge=b.planes[5],position=new T.Vector3(200,500,200);near.sim.position.copy(position).add(new T.Vector3(BLAST_KILL_RADIUS-1,0,0));edge.sim.position.copy(position).add(new T.Vector3(BLAST_KILL_RADIUS+1,0,0));
+  const bomb:Bomb={id:44,team:'ALLIED',position,previous:position.clone(),velocity:new T.Vector3(0,-30,0),age:1};(b as unknown as {explode:(bomb:Bomb)=>void}).explode(bomb);assert.equal(near.sim.crashCause,'BOMB BLAST');assert.equal(edge.sim.crashed,false);
 });
 test('near miss outside blast radius gives no points and high-speed terrain sweep finds ridges',()=>{
   const b=match(),target=b.buildings[8],position=target.position.clone().add(new T.Vector3(60,1,0));b.bombs.push({id:1,team:'ALLIED',position,previous:position.clone(),velocity:new T.Vector3(0,-300,0),age:0});b.step();assert.equal(b.scores.ALLIED,0);assert.equal(target.destroyed,false);

@@ -1,6 +1,6 @@
 import * as T from 'three';
-import { Battle, rackPosition, type Plane } from './battle';
-import { AIRCRAFT } from './aircraft';
+import { Battle, rackPosition, type ParkedPlane, type Team } from './battle';
+import { AIRCRAFT, type AircraftType } from './aircraft';
 import { CrashEffects } from './crash';
 import { ParticleEffects } from './particles';
 
@@ -16,31 +16,37 @@ export function bombModel(){
   const nose=new T.Mesh(new T.ConeGeometry(.12,.2,8),mat);nose.rotation.x=-Math.PI/2;nose.position.z=-.46;group.add(nose);
   for(const angle of[0,Math.PI/2]){const fin=new T.Mesh(new T.BoxGeometry(.42,.025,.25),mat);fin.position.z=.35;fin.rotation.z=angle;group.add(fin);}return group;
 }
-function aircraftModel(p:Plane){
-  const spec=AIRCRAFT[p.sim.aircraftType],g=new T.Group(),body=new T.MeshLambertMaterial({color:spec.color,flatShading:true}),canvas=new T.MeshLambertMaterial({color:spec.canvas,flatShading:true}),dark=new T.MeshLambertMaterial({color:'#28322e'}),team=new T.MeshLambertMaterial({color:p.team==='ALLIED'?'#72b7d4':'#e56749'});
+function aircraftModel(type:AircraftType,side:Team,carryBombs=true){
+  const spec=AIRCRAFT[type],g=new T.Group(),body=new T.MeshLambertMaterial({color:spec.color,flatShading:true}),canvas=new T.MeshLambertMaterial({color:spec.canvas,flatShading:true}),dark=new T.MeshLambertMaterial({color:'#28322e'}),team=new T.MeshLambertMaterial({color:side==='ALLIED'?'#72b7d4':'#e56749'});
   const box=(size:number[],pos:number[],mat:T.Material)=>{const m=new T.Mesh(new T.BoxGeometry(...size as [number,number,number]),mat);m.position.set(...pos as [number,number,number]);g.add(m);return m;};
   box([1,.8,6*spec.length],[0,-.15,.1],body);for(const y of[-.3,1.48])box([spec.span,.1,1.6],[0,y,-1.4],canvas);
   box([2.5*spec.span/8.8,.08,.9],[0,-.25,4.1*spec.length],canvas);box([.09,1.15,.9],[0,.25,4.1*spec.length],team);
   for(const x of[-spec.span*.35,spec.span*.35]){box([.08,1.8,.08],[x,.6,-1.9],dark);box([.08,1.8,.08],[x,.6,-.9],dark);box([1,.025,.6],[x,1.55,-1.4],team);}
   const prop=new T.Group();g.add(prop);
-  if(p.sim.aircraftType==='bomber')for(const x of[-spec.span*.18,spec.span*.18]){
-    const nacelle=box([.85,.72,2.05],[x,.38,-1.75],body);nacelle.rotation.x=.02;
-    const spinner=new T.Group();spinner.position.set(x,.38,-2.82);prop.add(spinner);spinner.add(box([.12,2,.07],[0,0,0],dark));
+  if(type==='bomber')for(const x of[-spec.span*.18,spec.span*.18]){
+    const nacelle=box([.7,.58,1.7],[x,.38,-1.75],body);nacelle.rotation.x=.02;
+    const spinner=new T.Group();spinner.position.set(x,.38,-2.65);prop.add(spinner);spinner.add(box([.11,1.8,.07],[0,0,0],dark));
   }else {const spinner=new T.Group();spinner.position.set(0,0,-3.52);prop.add(spinner);spinner.add(box([.12,1.8,.07],[0,0,0],dark));}
   box([.07,.07,2.5],[.34,.5,-2],dark);
   for(const x of[-.76,.76]){const wheel=new T.Mesh(new T.CylinderGeometry(.38,.38,.12,10),dark);wheel.rotation.z=Math.PI/2;wheel.position.set(x,-.77,-1.3);g.add(wheel);}
-  if(p.sim.aircraftType==='bomber'){box([.35,.65,.35],[0,.45,2.4],dark);box([.07,.07,1.4],[.2,.65,3.1],dark);}
-  const bombs:T.Group[]=[];for(let i=0;i<spec.bombs;i++){const b=bombModel();b.position.copy(rackPosition(i,spec.span));g.add(b);bombs.push(b);}return{g,prop,bombs};
+  if(type==='bomber'){box([.35,.65,.35],[0,.45,2.4],dark);box([.07,.07,1.4],[.2,.65,3.1],dark);}
+  const bombs:T.Group[]=[];if(carryBombs)for(let i=0;i<spec.bombs;i++){const b=bombModel();b.position.copy(rackPosition(i,spec.span));g.add(b);bombs.push(b);}return{g,prop,bombs};
+}
+function parkedWreck(target:ParkedPlane){
+  const g=new T.Group(),spec=AIRCRAFT[target.type],charred=new T.MeshLambertMaterial({color:'#292b26',flatShading:true}),canvas=new T.MeshLambertMaterial({color:'#51483a',flatShading:true});
+  const box=(size:number[],pos:number[],mat:T.Material,rotation=0)=>{const m=new T.Mesh(new T.BoxGeometry(...size as [number,number,number]),mat);m.position.set(...pos as [number,number,number]);m.rotation.y=rotation;g.add(m);};
+  box([.75,.28,4.1*spec.length],[0,-.82,.2],charred,.12);box([spec.span*.72,.07,1.05],[.35,-.7,-1.25],canvas,-.08);box([spec.span*.28,.06,.7],[-1.8,-.64,2.2],charred,.22);return g;
 }
 export class BattleView {
   private halos=new Map<number,T.Mesh>();
-  private root=new T.Group();private models=new Map<number,ReturnType<typeof aircraftModel>&{generation:number;effects:CrashEffects;camera:T.PerspectiveCamera}>();
+  private root=new T.Group();private models=new Map<number,ReturnType<typeof aircraftModel>&{generation:number;effects:CrashEffects;camera:T.PerspectiveCamera}>();private parkedModels=new Map<string,{intact:T.Group;wreck:T.Group}>();
   private bombMeshes=new Map<number,T.Group>();private blastMeshes=new Map<number,T.Mesh>();
   private blastGeometry=new T.IcosahedronGeometry(1,1);private blastMaterial=new T.MeshBasicMaterial({color:'#f0ae50',transparent:true,opacity:.8,depthWrite:false});
   private particles:ParticleEffects;
-  constructor(private scene:T.Scene,private battle:Battle){scene.add(this.root);this.particles=new ParticleEffects(scene,battle.surface);for(const p of battle.planes.slice(1)){const model=aircraftModel(p);this.root.add(model.g);this.models.set(p.id,{...model,generation:p.generation,effects:new CrashEffects(scene,battle.surface),camera:new T.PerspectiveCamera()});}}
+  constructor(private scene:T.Scene,private battle:Battle){scene.add(this.root);this.particles=new ParticleEffects(scene,battle.surface);for(const p of battle.planes.slice(1)){const model=aircraftModel(p.sim.aircraftType,p.team);this.root.add(model.g);this.models.set(p.id,{...model,generation:p.generation,effects:new CrashEffects(scene,battle.surface),camera:new T.PerspectiveCamera()});}for(const target of battle.parkedPlanes){const model=aircraftModel(target.type,target.team,false),wreck=parkedWreck(target);model.g.position.copy(target.position);model.g.quaternion.copy(target.rotation);wreck.position.copy(target.position);wreck.quaternion.copy(target.rotation);wreck.visible=false;this.root.add(model.g,wreck);this.parkedModels.set(target.id,{intact:model.g,wreck});}}
   update(dt:number,alpha:number,camera?:T.Camera){
     for(const event of this.battle.consumeEffects())this.particles.emit(event);this.particles.update(dt,this.battle.planes);
+    for(const target of this.battle.parkedPlanes){const model=this.parkedModels.get(target.id)!;model.intact.visible=!target.destroyed;model.wreck.visible=target.destroyed;}
     for(const p of this.battle.planes.slice(1)){const m=this.models.get(p.id)!;
       let halo=this.halos.get(p.id);
       if(!halo){halo=new T.Mesh(new T.PlaneGeometry(2,2),new T.ShaderMaterial({transparent:true,depthWrite:false,blending:T.AdditiveBlending,uniforms:{color:{value:new T.Color(p.team===this.battle.playerTeam?'#35ff67':'#ff352b')},strength:{value:.06}},vertexShader:'varying vec2 vUv; void main(){vUv=uv;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}',fragmentShader:'varying vec2 vUv; uniform vec3 color; uniform float strength; void main(){float r=length(vUv*2.0-1.0);float a=exp(-pow((r-0.72)/0.12,2.0))*strength;gl_FragColor=vec4(color,a);}'}));this.root.add(halo);this.halos.set(p.id,halo);}

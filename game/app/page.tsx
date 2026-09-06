@@ -170,7 +170,8 @@ export default function Home() {
               at {AIRCRAFT[type].takeoff} km/h
             </span>
             <small>
-              WASD looks around · operate every aircraft control in the cockpit
+              WASD looks around · Q/E slide left/right · operate every aircraft
+              control in the cockpit
             </small>
           </div>
           <h3>Aircraft</h3>
@@ -267,9 +268,10 @@ export default function Home() {
             </dd>
             <dt>Bombs & scoring</dt>
             <dd>
-              The bomber carries four 30 kg bombs, two under each wing. Click
-              BOMB RELEASE for one bomb at a time. Release is disabled on the
-              ground. Fly level over an enemy airfield, dropping
+              The bomber carries four 30 kg bombs, two under each wing. The
+              first click lifts the square guard over BOMB RELEASE; each later
+              click drops one bomb. Release is disabled on the ground. Fly
+              level over an enemy airfield, dropping
               before the target to allow for forward travel. Destroying an enemy
               hangar or tower awards 5 points once; every enemy aircraft crash
               awards 5 points, regardless of cause. First team to 100 wins.
@@ -304,9 +306,10 @@ export default function Home() {
             <dd>
               Drag the yoke sideways to bank, down to pull up, and up to lower
               the nose. Controls stay where released. WASD looks around,
-              including fully behind you. The LEVEL instrument shows aircraft
-              pitch and bank regardless of where you look. Automatic rudder
-              coordinates turns.
+              including fully behind you. Q and E slide the pilot left and right
+              inside the cockpit for a clearer view around the gun and fuselage.
+              The LEVEL instrument shows aircraft pitch and bank regardless of
+              where you look. Automatic rudder coordinates turns.
             </dd>
             <dt>Wind the wheels</dt>
             <dd>
@@ -340,11 +343,11 @@ export default function Home() {
             </dd>
             <dt>Controls & current scope</dt>
             <dd>
-              WASD looking is the only keyboard control. Use the cockpit for
-              ignition, brakes, flight controls, gun handling and bomb release.
-              AI and player losses count equally. Your team stays locked for the
-              round. Destroyed buildings stay destroyed for the match.
-              Simultaneous winning scores produce a draw.
+              WASD controls looking; Q and E slide the pilot left and right. Use
+              the cockpit for ignition, brakes, flight controls, gun handling
+              and bomb release. AI and player losses count equally. Your team
+              stays locked for the round. Destroyed buildings stay destroyed
+              for the match. Simultaneous winning scores produce a draw.
             </dd>
           </dl>
         </DialogContent>

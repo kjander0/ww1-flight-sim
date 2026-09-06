@@ -5,11 +5,13 @@ import { MachineGun, MUZZLE_VELOCITY } from './weapons';
 import { readAttitude } from './attitude';
 import { SceneryCollisions } from './collisions';
 import { parkingPosition } from './airfield-ops';
+import { AIRCRAFT, type AircraftType } from './aircraft';
 
 export type Team='ALLIED'|'CENTRAL';
 export const opponent=(team:Team):Team=>team==='ALLIED'?'CENTRAL':'ALLIED';
-export const TARGET_SCORE=100, POINTS_PER_EVENT=5, RESPAWN_DELAY=8;
+export const TARGET_SCORE=100, POINTS_PER_EVENT=5, RESPAWN_DELAY=8, BLAST_KILL_RADIUS=32;
 export type Building={id:string;team:Team;kind:'HANGAR'|'TOWER';position:T.Vector3;bounds:T.Box3;destroyed:boolean};
+export type ParkedPlane={id:string;team:Team;type:AircraftType;position:T.Vector3;rotation:T.Quaternion;bounds:T.Box3;health:number;destroyed:boolean};
 export type Plane={id:number;team:Team;sim:FlightSimulation;gun:MachineGun;rear:MachineGun;previous:T.Vector3;rotation:T.Quaternion;generation:number;scored:boolean;respawnAt:number;mode:string;target:number;decision:number;cooldown:number;runTarget:string;runStage:'approach'|'pass'|'egress'|'dogleg';homeField:number;departure:'waiting'|'taxi'|'lineup'|'takeoff'|'climb'|'flying';previousHealth:number;evasiveUntil:number;evasiveDirection:number};
 export type Bomb={id:number;team:Team;position:T.Vector3;previous:T.Vector3;velocity:T.Vector3;age:number};
 export type Blast={id:number;position:T.Vector3;age:number};
@@ -23,6 +25,14 @@ export function createBuildings(terrain:Terrain):Building[]{return AIRFIELDS.fla
     return{id:`${index}-${i}`,team:f.team,kind:tower?'TOWER':'HANGAR',position,bounds:new T.Box3(position.clone().sub(new T.Vector3(extent.x,0,extent.z)),position.clone().add(extent)),destroyed:false} as Building;
   });
 });}
+export function createParkedPlanes(terrain:Terrain):ParkedPlane[]{
+  const placements:[[number,number],AircraftType][]=[[[132,-300],'scout'],[[148,-110],'fighter'],[[132,80],'bomber'],[[148,270],'fighter']];
+  return AIRFIELDS.flatMap((field,fieldIndex)=>placements.map(([offset,type],slot)=>{
+    const spec=AIRCRAFT[type],base=terrain.airfieldHeights[fieldIndex],position=new T.Vector3(field.x+offset[0],base+1.15,field.z+offset[1]);
+    const rotation=new T.Quaternion().setFromAxisAngle(new T.Vector3(0,1,0),(slot%2?1:-1)*.055),extent=new T.Vector3(spec.span/2,1.7,4.6*spec.length);
+    return{id:`parked-${fieldIndex}-${slot}`,team:field.team,type,position,rotation,bounds:new T.Box3(new T.Vector3(position.x-extent.x,base,position.z-extent.z),new T.Vector3(position.x+extent.x,position.y+extent.y,position.z+extent.z)),health:1,destroyed:false};
+  }));
+}
 export function rackPosition(index:number,span:number){return new T.Vector3((index%2===0?-1:1)*span*(index<2?.22:.32),-.58,-1.4);}
 export function segmentBox(a:T.Vector3,b:T.Vector3,box:T.Box3):number|null{
   let near=0,far=1;for(const axis of['x','y','z'] as const){const d=b[axis]-a[axis];if(Math.abs(d)<1e-10){if(a[axis]<box.min[axis]||a[axis]>box.max[axis])return null;}else{const t0=(box.min[axis]-a[axis])/d,t1=(box.max[axis]-a[axis])/d;near=Math.max(near,Math.min(t0,t1));far=Math.min(far,Math.max(t0,t1));if(near>far)return null;}}return near;
@@ -37,12 +47,13 @@ export function terrainHit(a:T.Vector3,b:T.Vector3,height:(x:number,z:number)=>n
 
 /** Eight fixed roster slots; the player's slot is never replaced by a ninth plane. */
 export class Battle {
-  planes:Plane[]=[];buildings:Building[];bombs:Bomb[]=[];blasts:Blast[]=[];effects:EffectEvent[]=[];
+  planes:Plane[]=[];buildings:Building[];parkedPlanes:ParkedPlane[];bombs:Bomb[]=[];blasts:Blast[]=[];effects:EffectEvent[]=[];
   scores:Record<Team,number>={ALLIED:0,CENTRAL:0};winner:Team|'DRAW'|null=null;time=0;message='FIRST TEAM TO 100';
   private serial=0;
   constructor(readonly terrain:Terrain,player:FlightSimulation,gun:MachineGun,readonly playerTeam:Team='ALLIED',private random:()=>number=Math.random,private scenery?:SceneryCollisions){
     this.buildings=createBuildings(terrain);
-    if(scenery)scenery.isEnabled=(kind,bounds)=>!((kind==='HANGAR'||kind==='TOWER')&&this.buildings.some(b=>b.destroyed&&b.bounds.intersectsBox(bounds)));
+    this.parkedPlanes=createParkedPlanes(terrain);
+    if(scenery){for(const target of this.parkedPlanes)scenery.addBox('PARKED AIRCRAFT',target.bounds.min,target.bounds.max);scenery.isEnabled=(kind,bounds)=>!(((kind==='HANGAR'||kind==='TOWER')&&this.buildings.some(b=>b.destroyed&&b.bounds.intersectsBox(bounds)))||(kind==='PARKED AIRCRAFT'&&this.parkedPlanes.some(p=>p.destroyed&&p.bounds.intersectsBox(bounds))));}
     for(let id=0;id<8;id++){
       const team=id<4?playerTeam:opponent(playerTeam),sim=id===0?player:new FlightSimulation();
       if(id!==0){sim.aircraftType=id%4===3?'bomber':id%2===0?'fighter':'scout';sim.groundHeightAt=terrain.heightAt;sim.isWaterAt=(x,z)=>terrain.isWater(x,z);}
@@ -81,6 +92,7 @@ export class Battle {
     for(let i=0;i<this.planes.length;i++)for(let j=i+1;j<this.planes.length;j++){const a=this.planes[i],b=this.planes[j];if(a.sim.crashed||b.sim.crashed)continue;if(segmentSphere(a.previous.clone().sub(b.previous),a.sim.position.clone().sub(b.sim.position),2)!==null){a.sim.crash('MID-AIR COLLISION');b.sim.crash('MID-AIR COLLISION');}}
     for(let i=this.bombs.length-1;i>=0;i--){const b=this.bombs[i];b.previous.copy(b.position);b.velocity.multiplyScalar(Math.exp(-.012*dt));b.velocity.y-=9.81*dt;b.position.addScaledVector(b.velocity,dt);b.age+=dt;
       let hit=terrainHit(b.previous,b.position,this.surface);for(const building of this.buildings)if(!building.destroyed){const t=segmentBox(b.previous,b.position,building.bounds);if(t!==null&&(hit===null||t<hit))hit=t;}
+      for(const target of this.parkedPlanes)if(!target.destroyed){const t=segmentBox(b.previous,b.position,target.bounds);if(t!==null&&(hit===null||t<hit))hit=t;}
       if(hit!==null){b.position.lerpVectors(b.previous,b.position,hit);this.explode(b);this.bombs.splice(i,1);}else if(b.age>90)this.bombs.splice(i,1);
     }
     for(const blast of this.blasts)blast.age+=dt;this.blasts=this.blasts.filter(b=>b.age<5);
@@ -90,17 +102,24 @@ export class Battle {
     this.blasts.push({id:++this.serial,position:b.position.clone(),age:0});if(this.blasts.length>32)this.blasts.shift();
     this.pushEffect({kind:'explosion',position:b.position.clone(),velocity:b.velocity.clone(),intensity:1});
     for(const building of this.buildings){if(building.destroyed)continue;if(building.bounds.distanceToPoint(b.position)<=22){building.destroyed=true;if(building.team!==b.team)this.award(b.team,`${building.kind} DESTROYED`);}}
-    for(const p of this.planes){const d=p.sim.position.distanceTo(b.position);if(d<26)p.sim.damage((1-d/26)*2);}
+    for(const target of this.parkedPlanes)if(!target.destroyed&&target.bounds.distanceToPoint(b.position)<BLAST_KILL_RADIUS)this.destroyParked(target,b.team,'BOMBED');
+    for(const p of this.planes)if(!p.sim.crashed&&p.sim.position.distanceTo(b.position)<BLAST_KILL_RADIUS)p.sim.crash('BOMB BLAST');
+  }
+  private destroyParked(target:ParkedPlane,attacker:Team,reason:string){
+    if(target.destroyed)return;target.destroyed=true;target.health=0;this.pushEffect({kind:'explosion',position:target.position.clone(),velocity:new T.Vector3(),intensity:.65});if(target.team!==attacker)this.award(attacker,`PARKED AIRCRAFT ${reason}`);
   }
   private bulletHit(shooter:Plane,from:T.Vector3,to:T.Vector3){
-    let first=terrainHit(from,to,this.surface),victim:Plane|undefined;
-    for(const building of this.buildings){const box=building.bounds.clone();if(building.destroyed)box.max.y=box.min.y+1.5;const t=segmentBox(from,to,box);if(t!==null&&(first===null||t<first)){first=t;victim=undefined;}}
+    let first=terrainHit(from,to,this.surface),victim:Plane|undefined,parkedVictim:ParkedPlane|undefined;
+    for(const building of this.buildings){const box=building.bounds.clone();if(building.destroyed)box.max.y=box.min.y+1.5;const t=segmentBox(from,to,box);if(t!==null&&(first===null||t<first)){first=t;victim=undefined;parkedVictim=undefined;}}
+    for(const target of this.parkedPlanes){const box=target.bounds.clone();if(target.destroyed)box.max.y=box.min.y+.65;const t=segmentBox(from,to,box);if(t!==null&&(first===null||t<first)){first=t;victim=undefined;parkedVictim=target.destroyed?undefined:target;}}
     for(const p of this.planes){if(p===shooter||p.sim.crashed)continue;
       const inv=p.sim.orientation.clone().invert(),a=from.clone().sub(p.previous).applyQuaternion(inv),b=to.clone().sub(p.sim.position).applyQuaternion(inv);
       const boxes=[new T.Box3(new T.Vector3(-.7,-.7,-3.6),new T.Vector3(.7,.7,4.5*p.sim.spec.length)),new T.Box3(new T.Vector3(-p.sim.spec.span/2,-.5,-2.25),new T.Vector3(p.sim.spec.span/2,-.1,-.55)),new T.Box3(new T.Vector3(-p.sim.spec.span/2,1.25,-2.25),new T.Vector3(p.sim.spec.span/2,1.7,-.55))];
-      for(const box of boxes){const t=segmentBox(a,b,box);if(t!==null&&(first===null||t<first)){first=t;victim=p;}}
+      for(const box of boxes){const t=segmentBox(a,b,box);if(t!==null&&(first===null||t<first)){first=t;victim=p;parkedVictim=undefined;}}
     }
-    if(victim&&first!==null){victim.sim.damage(.18);this.pushEffect({kind:'damage',position:from.clone().lerp(to,first),velocity:victim.sim.velocity.clone(),intensity:.8});}return first;
+    if(victim&&first!==null){victim.sim.damage(.18);this.pushEffect({kind:'damage',position:from.clone().lerp(to,first),velocity:victim.sim.velocity.clone(),intensity:.8});}
+    else if(parkedVictim&&first!==null){parkedVictim.health-=.18;this.pushEffect({kind:'damage',position:from.clone().lerp(to,first),velocity:new T.Vector3(),intensity:.8});if(parkedVictim.health<=0)this.destroyParked(parkedVictim,shooter.team,'DESTROYED');}
+    return first;
   }
   private stepGun(p:Plane,gun:MachineGun,rear:boolean,dt:number){
     const s=p.sim;const direction=new T.Vector3(0,0,-1).applyQuaternion(s.orientation);let muzzle=new T.Vector3(.34,.505,-3.6).applyQuaternion(s.orientation).add(s.position);
