@@ -15,9 +15,9 @@ export function stepBody(body: Body, dt: number, ground: (x:number,z:number)=>nu
 }
 export class CrashEffects {
   private group = new T.Group(); private bodies: { mesh:T.Mesh; body:Body }[]=[];
-  private pilot: Body | null=null; private elapsed=0;
+  private pilot: Body | null=null; private elapsed=0; private detachedParts:T.Object3D[]=[];
   constructor(private scene:T.Scene, private ground:(x:number,z:number)=>number) { scene.add(this.group); }
-  get active() { return this.pilot!==null; }
+  get active() { return this.pilot!==null||this.bodies.length>0; }
   get pieceCount() { return this.bodies.length; }
   start(aircraft:T.Group, impactVelocity:T.Vector3, speed:number, camera:T.PerspectiveCamera) {
     this.reset(); aircraft.updateMatrixWorld(true); let seed=7931;
@@ -48,13 +48,25 @@ export class CrashEffects {
     this.pilot={position:camera.position.clone(),velocity:impactVelocity.clone().multiplyScalar(.4).addScaledVector(right,3+speed*.06).add(new T.Vector3(0,4+speed*.055,0)),rotation:camera.quaternion.clone(),spin:new T.Vector3(.7,-.35,2.3+speed*.025),radius:.32,asleep:false};
     aircraft.visible=false;
   }
-  update(dt:number,camera:T.PerspectiveCamera) {
-    if(!this.pilot)return;
-    const count=Math.max(1,Math.ceil(dt/(1/60))),step=dt/count;
-    for(let i=0;i<count;i++) { this.elapsed+=step; for(const {body}of this.bodies)stepBody(body,step,this.ground);this.pilot.spin.multiplyScalar(Math.exp(-step*.6));stepBody(this.pilot,step,this.ground); }
-    for(const {mesh,body}of this.bodies){mesh.position.copy(body.position);mesh.quaternion.copy(body.rotation);}
-    camera.position.copy(this.pilot.position);camera.quaternion.copy(this.pilot.rotation);
+  detach(part:T.Object3D, impactVelocity:T.Vector3, speed:number) {
+    this.reset();part.updateMatrixWorld(true);
+    part.traverse(o=>{
+      if(!(o instanceof T.Mesh)||Array.isArray(o.material)||!o.material.visible)return;
+      o.geometry.computeBoundingBox();const box=o.geometry.boundingBox!;
+      const size=box.getSize(new T.Vector3()).multiply(o.getWorldScale(new T.Vector3()));
+      const mesh=new T.Mesh(new T.BoxGeometry(size.x,size.y,size.z),o.material);this.group.add(mesh);
+      const body:Body={position:o.localToWorld(box.getCenter(new T.Vector3())),velocity:impactVelocity.clone().multiplyScalar(.35).add(new T.Vector3(1.8,2.5,-1.2)),rotation:o.getWorldQuaternion(new T.Quaternion()),spin:new T.Vector3(7,2,11+speed*.08),radius:Math.max(.06,Math.min(.45,size.length()*.18)),asleep:false};
+      mesh.position.copy(body.position);mesh.quaternion.copy(body.rotation);this.bodies.push({mesh,body});
+    });
+    part.visible=false;this.detachedParts.push(part);
   }
-  reset(){for(const {mesh}of this.bodies){mesh.geometry.dispose();this.group.remove(mesh);}this.bodies=[];this.pilot=null;this.elapsed=0;}
+  update(dt:number,camera:T.PerspectiveCamera) {
+    if(!this.active)return;
+    const count=Math.max(1,Math.ceil(dt/(1/60))),step=dt/count;
+    for(let i=0;i<count;i++) { this.elapsed+=step; for(const {body}of this.bodies)stepBody(body,step,this.ground);if(this.pilot){this.pilot.spin.multiplyScalar(Math.exp(-step*.6));stepBody(this.pilot,step,this.ground);} }
+    for(const {mesh,body}of this.bodies){mesh.position.copy(body.position);mesh.quaternion.copy(body.rotation);}
+    if(this.pilot){camera.position.copy(this.pilot.position);camera.quaternion.copy(this.pilot.rotation);}
+  }
+  reset(){for(const {mesh}of this.bodies){mesh.geometry.dispose();this.group.remove(mesh);}for(const part of this.detachedParts)part.visible=true;this.bodies=[];this.detachedParts=[];this.pilot=null;this.elapsed=0;}
   dispose(){this.reset();this.scene.remove(this.group);}
 }

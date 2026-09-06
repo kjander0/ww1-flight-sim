@@ -52,6 +52,26 @@ test('gentle touchdown rolls out; hard impact is a crash', () => {
   const good = airborne(); good.position.y = 1.2; good.velocity.set(0, -1, -25); run(good, .2); assert.equal(good.crashed, false);
   const bad = airborne(); bad.position.y = 1.2; bad.velocity.set(0, -7, -25); run(bad, .2); assert.equal(bad.crashed, true);
 });
+test('sharp high-speed ground steering overloads the narrow landing gear', () => {
+  const s = new FlightSimulation(); s.windEnabled=false; s.controls.brake=false; s.velocity.set(0,0,-35); s.controls.roll=1;
+  run(s,1); assert.equal(s.crashed,true); assert.equal(s.crashCause,'GROUND LOOP'); assert.ok(s.impactSpeed>30);
+});
+test('small high-speed runway corrections remain controllable', () => {
+  const s = new FlightSimulation(); s.windEnabled=false; s.controls.brake=false; s.velocity.set(0,0,-35); s.controls.roll=.25;
+  run(s,1); assert.equal(s.crashed,false); assert.equal(s.grounded,true); assert.ok(s.groundLoad<3.8);
+});
+test('a running propeller breaks when a nose-low aircraft touches the ground', () => {
+  const s = new FlightSimulation(); s.windEnabled=false; s.controls.brake=false; s.position.y=SPEC.groundHeight;
+  s.orientation.setFromEuler(new Euler(-.14,0,0)); s.velocity.set(0,0,-8); s.rpm=900; s.engine='running'; s.step();
+  assert.equal(s.crashed,true); assert.equal(s.crashCause,'PROP STRIKE'); assert.ok(s.propClearance<=0);
+});
+test('full forward elevator at takeoff speed lifts the tail into a prop strike', () => {
+  const s = new FlightSimulation(); s.windEnabled=false; s.controls.brake=false; s.controls.pitch=-1;
+  s.velocity.set(0,0,-30); s.rpm=1500; s.engine='running'; run(s,2);
+  assert.equal(s.crashed,true); assert.equal(s.crashCause,'PROP STRIKE');
+  const pitch=new Euler().setFromQuaternion(s.orientation,'YXZ').x;
+  assert.ok(pitch<-.08,`pitch ${pitch}`);
+});
 test('a nose-low field landing can rotate for another takeoff at 120 km/h', () => {
   for (const heading of [0, Math.PI / 2, Math.PI, -Math.PI / 2]) {
     const s = airborne(); s.position.set(1400, 1.2, 1700);

@@ -6,9 +6,10 @@ import { AIRFIELDS, Terrain } from './terrain';
 import { WorldView } from './world';
 import { CrashEffects } from './crash';
 import { horizonMaterial, readAttitude } from './attitude';
+import { AMMO_CAPACITY, MachineGun } from './weapons';
 export type FlightInfo={aircraftType:AircraftType;airfieldIndex:number;x:number;z:number;heading:number;altitude:number;crashed:boolean};
 
-type Control = 'throttle' | 'mixture' | 'radiator' | 'yoke' | 'ignition' | 'brake';
+type Control = 'throttle' | 'mixture' | 'radiator' | 'yoke' | 'ignition' | 'brake' | 'trigger' | 'cocking';
 type Gauge = { needle: T.Group; max: number; read: () => number };
 export class FlightGame {
   readonly sim = new FlightSimulation();
@@ -32,6 +33,9 @@ export class FlightGame {
   private prevPosition = new T.Vector3(); private prevRotation = new T.Quaternion(); private look = new T.Quaternion();
   private propeller = new T.Group(); private resizeObserver: ResizeObserver;
   private labels: T.Texture[] = []; private fps = 60;
+  readonly gun = new MachineGun();
+  private gunTrigger = new T.Group(); private cockingHandle = new T.Group(); private cockTravel = 0; private gunRecoil = 0; private shownRounds = 0;
+  private tracerGeometry = new T.BoxGeometry(1, 1, 1); private tracers: T.InstancedMesh;
   private toolLifecycle = new AbortController();
   private audio: AudioContext | null = null; private oscillator: OscillatorNode | null = null; private gain: GainNode | null = null;
   constructor(private mount: HTMLElement, private report: (status: string, hint: string, telemetry: string, info:FlightInfo) => void) {
@@ -39,7 +43,7 @@ export class FlightGame {
     this.renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
     this.renderer.autoClear = false; this.renderer.outputColorSpace = T.SRGBColorSpace;
     this.renderer.domElement.tabIndex = 0;
-    this.renderer.domElement.setAttribute('aria-label', 'Flight simulator. WASD look; I ignition; B brake; X center yoke; C center view. Drag the cockpit controls with the mouse.');
+    this.renderer.domElement.setAttribute('aria-label', 'Flight simulator. WASD look; I ignition; B brake; X center yoke; C center view. Drag the cockpit controls, gun trigger, and cocking handle with the mouse.');
     mount.appendChild(this.renderer.domElement);
     this.scene.background = new T.Color('#abb9a4'); this.scene.fog = new T.Fog('#abb9a4', 1600, 6500);
     for (const scene of [this.scene, this.cockpit]) {
@@ -47,6 +51,9 @@ export class FlightGame {
       const sun = new T.DirectionalLight('#ffe4b5', 2.7); sun.position.set(-150, 250, 60); scene.add(sun);
     }
     this.screen.add(new T.Mesh(new T.PlaneGeometry(2, 2), new T.MeshBasicMaterial({ map: this.target.texture, depthTest: false, depthWrite: false })));
+    this.tracers = new T.InstancedMesh(this.tracerGeometry, new T.MeshBasicMaterial({ color: '#ffd66b', transparent: true, opacity: .95, depthWrite: false }), 128);
+    this.tracers.count = 0;
+    this.tracers.frustumCulled = false; this.scene.add(this.tracers);
     this.sim.aircraftType=(Object.keys(AIRCRAFT) as AircraftType[])[Math.floor(Math.random()*3)];
     this.airfieldIndex=Math.floor(Math.random()*2);
     this.sim.groundHeightAt=this.terrain.heightAt;this.sim.isWaterAt=(x,z)=>this.terrain.isWater(x,z);
@@ -151,6 +158,27 @@ export class FlightGame {
       this.hit(name, .76, y, -.38, .2, .16);
     }
     this.propeller.position.set(0, 0, -3.52); this.box(this.propeller, [.13, 1.8, .08], [0, 0, 0], timber); this.aircraft.add(this.propeller);
+    this.buildGun(dark, brass, timber);
+  }
+  private buildGun(dark: T.Material, brass: T.Material, timber: T.Material) {
+    const gun = new T.Group(); gun.position.set(.34, .48, -.55); this.aircraft.add(gun);
+    this.box(gun, [.19, .19, .72], [0, 0, -.2], dark);
+    const jacket = new T.Mesh(new T.CylinderGeometry(.062, .062, 2.25, 10), dark); jacket.rotation.x = Math.PI / 2; jacket.position.set(0, .025, -1.66); gun.add(jacket);
+    for (let z = -.72; z > -2.65; z -= .18) { const ring = new T.Mesh(new T.TorusGeometry(.066, .009, 5, 10), dark); ring.position.set(0, .025, z); gun.add(ring); }
+    this.rod(gun, [0, .025, -2.75], [0, .025, -3.05], .028, dark);
+    // Ring-and-bead sight: both are on the true bore line, so gravity and lead still matter.
+    const rearSight = new T.Mesh(new T.TorusGeometry(.085, .009, 7, 24), brass); rearSight.position.set(0, .22, .08); gun.add(rearSight);
+    this.rod(gun, [0, .135, .08], [0, .22, .08], .007, brass);
+    this.rod(gun, [0, .065, -2.83], [0, .22, -2.83], .008, brass);
+    const bead = new T.Mesh(new T.SphereGeometry(.018, 8, 6), brass); bead.position.set(0, .22, -2.83); gun.add(bead);
+    this.gunTrigger = new T.Group(); this.gunTrigger.position.set(-.13, -.08, .12); gun.add(this.gunTrigger);
+    this.rod(this.gunTrigger, [0, .05, 0], [0, -.08, .02], .014, brass);
+    const guard = new T.Mesh(new T.TorusGeometry(.075, .009, 5, 14, Math.PI), dark); guard.rotation.z = Math.PI / 2; guard.position.set(-.01, -.02, .015); this.gunTrigger.add(guard);
+    this.cockingHandle = new T.Group(); this.cockingHandle.position.set(.14, .08, -.08); gun.add(this.cockingHandle);
+    this.rod(this.cockingHandle, [0, 0, 0], [.12, 0, 0], .018, brass);
+    const grip = new T.Mesh(new T.CylinderGeometry(.032, .032, .15, 8), timber); grip.rotation.z = Math.PI / 2; grip.position.x = .16; this.cockingHandle.add(grip);
+    this.hit('trigger', .20, .37, -.34, .24, .25);
+    this.hit('cocking', .55, .58, -.55, .26, .25);
   }
   private gauge(name: string, unit: string, max: number, read: () => number, x: number, y: number, z: number) {
     const radius = .134;
@@ -185,13 +213,15 @@ export class FlightGame {
     if (e.button !== 0 || this.paused || this.sim.crashed) return;
     this.renderer.domElement.focus(); this.startAudio(); const name = this.pick(e); if (!name) return; e.preventDefault();
     if (name === 'ignition' || name === 'brake') { this.sim.controls[name] = !this.sim.controls[name]; return; }
+    if (name === 'trigger') this.gun.trigger = true;
     const grabOffset = new T.Vector2();
     if (name === 'throttle') {
       const rect = this.renderer.domElement.getBoundingClientRect();
       projectThrottleGrip(this.sim.controls.throttle, this.aircraft.matrixWorld, this.camera, rect.width, rect.height, grabOffset);
       grabOffset.x -= e.clientX - rect.left; grabOffset.y -= e.clientY - rect.top;
     }
-    this.dragging = { name, x: e.clientX, y: e.clientY, initial: name === 'yoke' ? 0 : this.sim.controls[name], pitch: this.sim.controls.pitch, roll: this.sim.controls.roll, id: e.pointerId, grabOffset, wheel:name==='mixture'||name==='radiator'?new WheelWinder(this.wheelAngle(name)):undefined };
+    const initial = name === 'yoke' || name === 'trigger' || name === 'cocking' ? 0 : this.sim.controls[name];
+    this.dragging = { name, x: e.clientX, y: e.clientY, initial, pitch: this.sim.controls.pitch, roll: this.sim.controls.roll, id: e.pointerId, grabOffset, wheel:name==='mixture'||name==='radiator'?new WheelWinder(this.wheelAngle(name)):undefined };
     this.renderer.domElement.setPointerCapture(e.pointerId);
   };
   private move = (e: PointerEvent) => {
@@ -205,10 +235,11 @@ export class FlightGame {
         this.dragTarget.set(e.clientX - rect.left + d.grabOffset.x, e.clientY - rect.top + d.grabOffset.y);
         this.sim.controls.throttle = throttleAtPointer(this.dragTarget, this.aircraft.matrixWorld, this.camera, rect.width, rect.height);
       } else if (d.name === 'mixture' || d.name === 'radiator') {this.pick(e);this.sim.controls[d.name]=d.wheel!.update(this.wheelAngle(d.name),this.sim.controls[d.name]);}
+      else if (d.name === 'cocking') { this.cockTravel = clamp((e.clientY - d.y) / Math.max(65, this.mount.clientHeight * .12), 0, 1); if (this.cockTravel >= .92) this.gun.cock(); }
     } else this.hover = this.pick(e);
     this.renderer.domElement.style.cursor = d ? 'grabbing' : this.hover ? 'grab' : 'default';
   };
-  private up = () => { const d = this.dragging; this.dragging = null; if (d && this.renderer.domElement.hasPointerCapture(d.id)) this.renderer.domElement.releasePointerCapture(d.id); };
+  private up = () => { const d = this.dragging; if (d?.name === 'trigger') this.gun.trigger = false; this.dragging = null; if (d && this.renderer.domElement.hasPointerCapture(d.id)) this.renderer.domElement.releasePointerCapture(d.id); };
   private keydown = (e: KeyboardEvent) => {
     if (this.paused || (e.target instanceof HTMLElement && ['INPUT', 'TEXTAREA', 'BUTTON'].includes(e.target.tagName))) return;
     const k = e.key.toLowerCase(); if (!'wasdicxbr'.includes(k) || k.length !== 1) return; e.preventDefault(); this.keys.add(k);
@@ -224,14 +255,14 @@ export class FlightGame {
   private visibility = () => { this.blur(); this.last = 0; this.accumulator = 0; if (document.hidden && this.audio && this.gain) this.gain.gain.setTargetAtTime(0, this.audio.currentTime, .04); };
   private resize = () => { const w = this.mount.clientWidth, h = this.mount.clientHeight; this.renderer.setSize(w, h); this.target.setSize(Math.round(420 * w / h), 420); this.camera.aspect = w / h; this.camera.fov = w / h < 1.3 ? 75 : 60; this.camera.updateProjectionMatrix(); };
   private setSpawn(){const f=AIRFIELDS[this.airfieldIndex];this.sim.spawn.set(f.x,this.terrain.airfieldHeights[this.airfieldIndex]+1.15,f.z+400);}
-  reset() { this.crashEffects.reset();this.aircraft.visible=true;this.sim.reset(); this.prevPosition.copy(this.sim.position); this.prevRotation.copy(this.sim.orientation); this.yaw = 0; this.pitch = -.23; this.accumulator = 0; this.blur();this.hover=null; }
+  reset() { this.crashEffects.reset();this.aircraft.visible=true;this.sim.reset();this.gun.reset();this.cockTravel=0;this.gunRecoil=0;this.shownRounds=0; this.prevPosition.copy(this.sim.position); this.prevRotation.copy(this.sim.orientation); this.yaw = 0; this.pitch = -.23; this.accumulator = 0; this.blur();this.hover=null; }
   startSortie(type:AircraftType,airfieldIndex:number){
     if(!(type in AIRCRAFT)||!Number.isInteger(airfieldIndex)||airfieldIndex<0||airfieldIndex>=AIRFIELDS.length)throw new Error('Invalid aircraft or airfield');
     this.crashEffects.reset();this.releaseAircraft();this.sim.aircraftType=type;this.airfieldIndex=airfieldIndex;this.setSpawn();this.reset();this.buildAircraft();
   }
   private releaseAircraft(){
     const geometries=new Set<T.BufferGeometry>(),materials=new Set<T.Material>();this.aircraft.traverse(o=>{if(o instanceof T.Mesh){geometries.add(o.geometry);for(const m of Array.isArray(o.material)?o.material:[o.material])materials.add(m);}});
-    geometries.forEach(g=>g.dispose());materials.forEach(m=>m.dispose());this.labels.forEach(t=>t.dispose());this.labels=[];this.aircraft.clear();this.gauges=[];this.hits=[];this.knobs={};this.propeller=new T.Group();this.attitude=null;
+    geometries.forEach(g=>g.dispose());materials.forEach(m=>m.dispose());this.labels.forEach(t=>t.dispose());this.labels=[];this.aircraft.clear();this.gauges=[];this.hits=[];this.knobs={};this.propeller=new T.Group();this.gunTrigger=new T.Group();this.cockingHandle=new T.Group();this.attitude=null;
   }
   private startAudio() {
     if (!this.audio) { this.audio = new AudioContext(); this.oscillator = this.audio.createOscillator(); this.gain = this.audio.createGain(); const filter = this.audio.createBiquadFilter(); filter.type = 'lowpass'; filter.frequency.value = 220; this.oscillator.type = 'sawtooth'; this.oscillator.connect(filter); filter.connect(this.gain); this.gain.connect(this.audio.destination); this.gain.gain.value = 0; this.oscillator.start(); }
@@ -248,6 +279,32 @@ export class FlightGame {
     ];
     for (const tool of tools) try { void Promise.resolve(context.registerTool(tool, { signal: this.toolLifecycle.signal })).catch(() => {}); } catch { /* Optional browser capability; flight remains available. */ }
   }
+  private stepGun() {
+    if (this.sim.crashed) this.gun.trigger = false;
+    const muzzle = new T.Vector3(.34, .505, -3.6).applyQuaternion(this.sim.orientation).add(this.sim.position);
+    const direction = new T.Vector3(0, 0, -1).applyQuaternion(this.sim.orientation);
+    this.gun.step(DT, { muzzle, direction, aircraftVelocity: this.sim.velocity, groundHeightAt: this.terrain.heightAt });
+  }
+  private updateTracers() {
+    const center = new T.Vector3(), direction = new T.Vector3(), rotation = new T.Quaternion(), scale = new T.Vector3(), matrix = new T.Matrix4();
+    let n = 0;
+    for (const p of this.gun.projectiles) {
+      if (!p.tracer || n >= 128) continue;
+      direction.copy(p.velocity).normalize();
+      // Grow the streak from the muzzle; never draw a tail farther back than
+      // the round could have travelled since it was fired.
+      const desiredLength = Math.max(24, p.previous.distanceTo(p.position) * 2.5);
+      const travelledDistance = p.age * p.velocity.length();
+      const length = Math.max(.25, Math.min(desiredLength, travelledDistance));
+      center.copy(p.position).addScaledVector(direction, -length * .5);
+      rotation.setFromUnitVectors(new T.Vector3(0, 0, 1), direction);
+      scale.set(.075, .075, length);
+      matrix.compose(center, rotation, scale);
+      this.tracers.setMatrixAt(n, matrix);
+      n++;
+    }
+    this.tracers.count = n; this.tracers.instanceMatrix.needsUpdate = true;
+  }
   private animate = (now: number) => {
     this.frame = requestAnimationFrame(this.animate);
     const elapsed = this.last ? Math.min((now - this.last) / 1000, .1) : 0; this.last = now;
@@ -257,7 +314,7 @@ export class FlightGame {
       this.yaw = clamp(this.yaw + ((this.keys.has('a') ? 1 : 0) - (this.keys.has('d') ? 1 : 0)) * elapsed, -2.1, 2.1);
       this.pitch = clamp(this.pitch + ((this.keys.has('w') ? 1 : 0) - (this.keys.has('s') ? 1 : 0)) * elapsed, -1.05, .85);
       this.accumulator += elapsed;
-      while (this.accumulator >= DT) { this.prevPosition.copy(this.sim.position); this.prevRotation.copy(this.sim.orientation); this.sim.step(); this.accumulator -= DT; }
+      while (this.accumulator >= DT) { this.prevPosition.copy(this.sim.position); this.prevRotation.copy(this.sim.orientation); this.sim.step(); this.stepGun(); this.accumulator -= DT; }
     } else { this.accumulator = 0; this.prevPosition.copy(this.sim.position); this.prevRotation.copy(this.sim.orientation); this.blur(); }
     this.aircraft.position.lerpVectors(this.prevPosition, this.sim.position, this.accumulator / DT); this.aircraft.quaternion.slerpQuaternions(this.prevRotation, this.sim.orientation, this.accumulator / DT);
     this.look.setFromEuler(new T.Euler(this.pitch, this.yaw, 0, 'YXZ'));
@@ -267,9 +324,14 @@ export class FlightGame {
       if(!this.crashEffects.active){
         this.aircraft.position.copy(this.sim.position);this.aircraft.quaternion.copy(this.sim.orientation);this.aircraft.updateMatrixWorld(true);
         this.camera.position.set(0,.68,1.3).applyQuaternion(this.aircraft.quaternion).add(this.aircraft.position);this.camera.quaternion.copy(this.aircraft.quaternion).multiply(this.look);
-        this.crashEffects.start(this.aircraft,this.sim.impactVelocity,this.sim.impactSpeed,this.camera);this.yaw=0;this.pitch=0;this.look.identity();this.up();this.hover=null;
+        if(this.sim.crashCause==='PROP STRIKE')this.crashEffects.detach(this.propeller,this.sim.impactVelocity,this.sim.impactSpeed);
+        else {this.crashEffects.start(this.aircraft,this.sim.impactVelocity,this.sim.impactSpeed,this.camera);this.yaw=0;this.pitch=0;this.look.identity();}
+        this.up();this.hover=null;
       }
-      this.crashEffects.update(active?elapsed:0,this.camera);this.camera.quaternion.multiply(this.look);
+      if(this.sim.crashCause==='PROP STRIKE'){
+        this.camera.position.set(0,.68,1.3).applyQuaternion(this.aircraft.quaternion).add(this.aircraft.position);this.camera.quaternion.copy(this.aircraft.quaternion).multiply(this.look);
+        this.crashEffects.update(active?elapsed:0,this.camera);
+      }else {this.crashEffects.update(active?elapsed:0,this.camera);this.camera.quaternion.multiply(this.look);}
     }
     this.camera.updateMatrixWorld();
     for (const g of this.gauges) g.needle.rotation.z = (135 - clamp(g.read() / g.max, 0, 1) * 270) * Math.PI / 180;
@@ -279,6 +341,12 @@ export class FlightGame {
     this.knobs.mixture!.rotation.z = -c.mixture * Math.PI * 3; this.knobs.radiator!.rotation.z = -c.radiator * Math.PI * 3;
     this.knobs.yoke!.rotation.z = -c.roll * .6; this.knobs.yoke!.rotation.x = c.pitch * .45;
     this.knobs.ignition!.position.z = c.ignition ? -.47 : -.44; this.knobs.brake!.position.z = c.brake ? -.44 : -.48;
+    this.cockTravel = this.dragging?.name === 'cocking' ? this.cockTravel : Math.max(0, this.cockTravel - elapsed * 5);
+    this.cockingHandle.position.z = -.08 + this.cockTravel * .28;
+    if (this.gun.roundsFired !== this.shownRounds) { this.shownRounds = this.gun.roundsFired; this.gunRecoil = 1; }
+    this.gunRecoil = Math.max(0, this.gunRecoil - elapsed * 18);
+    this.gunTrigger.rotation.x = (this.gun.trigger ? -.34 : 0) + this.gunRecoil * .08;
+    this.updateTracers();
     if (active) this.propeller.rotation.z += this.sim.rpm * Math.PI / 30 * elapsed;
     this.cockpit.updateMatrixWorld(true);
     this.renderer.setRenderTarget(this.target); this.renderer.clear(); this.renderer.render(this.scene, this.camera);
@@ -286,12 +354,12 @@ export class FlightGame {
     if (this.audio && this.oscillator && this.gain) { this.oscillator.frequency.setTargetAtTime(22 + this.sim.rpm / 14, this.audio.currentTime, .12); this.gain.gain.setTargetAtTime(active && this.sim.engine !== 'off' && !this.sim.crashed ? .018 + c.throttle * .015 : 0, this.audio.currentTime, .12); }
     if (now - this.reportTime > 120) {
       this.reportTime = now; const s = this.sim;
-      const status = s.crashed ? `CRASHED · ${s.crashCause || 'IMPACT'} · RESET SORTIE` : Math.max(Math.abs(s.position.x),Math.abs(s.position.z))>4800?'MAP EDGE · TURN BACK':s.stall ? 'STALL · LOWER THE NOSE' : s.temperature > 110 ? 'ENGINE HOT · OPEN RADIATOR' : s.grounded ? (s.engine === 'off' ? 'PARKED · ENGINE OFF' : c.brake ? 'ENGINE ' + s.engine.toUpperCase() + ' · BRAKE SET' : 'GROUND ROLL · FREE FLIGHT') : 'AIRBORNE · FREE FLIGHT';
+      const status = s.crashed ? `CRASHED · ${s.crashCause || 'IMPACT'} · RESET SORTIE` : this.gun.roundsRemaining === 0 ? 'GUN EMPTY · RESET SORTIE TO REARM' : this.gun.jammed ? 'GUN JAMMED · CYCLE COCKING HANDLE' : this.gun.heat > .72 ? 'GUN HOT · DISPERSION INCREASING' : Math.max(Math.abs(s.position.x),Math.abs(s.position.z))>4800?'MAP EDGE · TURN BACK':s.stall ? 'STALL · LOWER THE NOSE' : s.temperature > 110 ? 'ENGINE HOT · OPEN RADIATOR' : s.grounded ? (s.engine === 'off' ? 'PARKED · ENGINE OFF' : c.brake ? 'ENGINE ' + s.engine.toUpperCase() + ' · BRAKE SET' : 'GROUND ROLL · FREE FLIGHT') : 'AIRBORNE · FREE FLIGHT';
       const control = this.dragging?.name ?? this.hover;
-      const value = control === 'yoke' ? `PITCH ${Math.round(c.pitch * 100)}% · ROLL ${Math.round(c.roll * 100)}%` : control === 'ignition' ? c.ignition ? 'ON' : 'OFF' : control === 'brake' ? c.brake ? 'SET — CLICK TO RELEASE' : 'RELEASED' : control ? Math.round(c[control] * 100) + '%' : '';
-      const hint = control ? `${control.toUpperCase()} · ${value}${control==='mixture'||control==='radiator'?' · WIND CLOCKWISE TO INCREASE':control==='throttle'||control==='yoke'?' · DRAG TO ADJUST':''}` : s.crashed ? 'Press R or RESET SORTIE to return to the airstrip.' : !c.ignition ? 'Click IGNITION in the cockpit to start your engine.' : c.brake && s.grounded ? 'Release BRAKE, then drag THROTTLE upward.' : s.grounded && s.airspeed*3.6 < s.spec.takeoff ? `Build speed to ${s.spec.takeoff} km/h, then gently pull the yoke toward you.` : 'WASD to look · Drag the yoke to fly · X centers the yoke';
+      const value = control === 'yoke' ? `PITCH ${Math.round(c.pitch * 100)}% · ROLL ${Math.round(c.roll * 100)}%` : control === 'ignition' ? c.ignition ? 'ON' : 'OFF' : control === 'brake' ? c.brake ? 'SET — CLICK TO RELEASE' : 'RELEASED' : control === 'trigger' ? this.gun.roundsRemaining === 0 ? 'EMPTY' : this.gun.jammed ? 'JAMMED' : this.gun.cocked ? `READY · ${this.gun.roundsRemaining} ROUNDS` : 'NOT COCKED' : control === 'cocking' ? `${this.gun.cocked ? 'ACTION READY' : 'PULL DOWN FULLY'} · ${Math.round(this.cockTravel * 100)}%` : control ? Math.round(c[control] * 100) + '%' : '';
+      const hint = control ? `${control.toUpperCase()} · ${value}${control==='mixture'||control==='radiator'?' · WIND CLOCKWISE TO INCREASE':control==='throttle'||control==='yoke'?' · DRAG TO ADJUST':control==='cocking'?' · DRAG DOWN AND RELEASE':''}` : s.crashed ? 'Press R or RESET SORTIE to return to the airstrip.' : this.gun.roundsRemaining === 0 ? 'Ammunition exhausted. Reset or begin a new sortie to load another belt.' : this.gun.jammed ? 'The gun has jammed. Drag the brass cocking handle fully down, then release.' : !this.gun.cocked ? 'Cock the gun once: drag its brass side handle fully down, then release.' : !c.ignition ? 'Click IGNITION in the cockpit to start your engine.' : c.brake && s.grounded ? 'Release BRAKE, then drag THROTTLE upward.' : s.grounded && s.airspeed*3.6 < s.spec.takeoff ? `Build speed to ${s.spec.takeoff} km/h, then gently pull the yoke toward you.` : 'Sight through the ring and bead · Hold the gun trigger to fire';
       const attitude=readAttitude(s.orientation);
-      this.report(status, hint, `${this.fps.toFixed(0)} FPS · 60 Hz physics\nALT ${s.position.y.toFixed(1)} m  IAS ${(s.indicatedAirspeed * 3.6).toFixed(1)} km/h\nAoA ${(s.alpha * 180 / Math.PI).toFixed(1)}°  V/S ${s.velocity.y.toFixed(1)} m/s\nLIFT ${s.lift.toFixed(0)} N  DRAG ${s.drag.toFixed(0)} N\nRADIATOR DRAG ${s.radiatorDrag.toFixed(0)} N\nROLL ${(attitude.roll*180/Math.PI).toFixed(0)}° PITCH ${(attitude.pitch*180/Math.PI).toFixed(0)}°\nRPM ${s.rpm.toFixed(0)}  TEMP ${s.temperature.toFixed(1)}°C\nFUEL ${s.fuel.toFixed(1)} L  ENGINE ${(s.health * 100).toFixed(0)}%\nPOS ${s.position.x.toFixed(0)}, ${s.position.z.toFixed(0)}`,{aircraftType:s.aircraftType,airfieldIndex:this.airfieldIndex,x:s.position.x,z:s.position.z,heading:-new T.Euler().setFromQuaternion(s.orientation,'YXZ').y*180/Math.PI,altitude:s.position.y,crashed:s.crashed});
+      this.report(status, hint, `${this.fps.toFixed(0)} FPS · 60 Hz physics\nALT ${s.position.y.toFixed(1)} m  IAS ${(s.indicatedAirspeed * 3.6).toFixed(1)} km/h\nAoA ${(s.alpha * 180 / Math.PI).toFixed(1)}°  V/S ${s.velocity.y.toFixed(1)} m/s\nLIFT ${s.lift.toFixed(0)} N  DRAG ${s.drag.toFixed(0)} N\nRADIATOR DRAG ${s.radiatorDrag.toFixed(0)} N\nGROUND LOAD ${(s.groundLoad/9.81).toFixed(2)} g  PROP CLEAR ${Number.isFinite(s.propClearance)?s.propClearance.toFixed(2):'—'} m\nROLL ${(attitude.roll*180/Math.PI).toFixed(0)}° PITCH ${(attitude.pitch*180/Math.PI).toFixed(0)}°\nRPM ${s.rpm.toFixed(0)}  TEMP ${s.temperature.toFixed(1)}°C\nGUN ${this.gun.jammed?'JAMMED':this.gun.cocked?'READY':'SAFE'}  HEAT ${(this.gun.heat*100).toFixed(0)}%  AMMO ${this.gun.roundsRemaining}/${AMMO_CAPACITY}\nFUEL ${s.fuel.toFixed(1)} L  ENGINE ${(s.health * 100).toFixed(0)}%\nPOS ${s.position.x.toFixed(0)}, ${s.position.z.toFixed(0)}`,{aircraftType:s.aircraftType,airfieldIndex:this.airfieldIndex,x:s.position.x,z:s.position.z,heading:-new T.Euler().setFromQuaternion(s.orientation,'YXZ').y*180/Math.PI,altitude:s.position.y,crashed:s.crashed});
     }
   };
   dispose() {
@@ -302,6 +370,6 @@ export class FlightGame {
     window.removeEventListener('keydown', this.keydown); window.removeEventListener('keyup', this.keyup); window.removeEventListener('blur', this.blur); document.removeEventListener('visibilitychange', this.visibility);
     const geometries = new Set<T.BufferGeometry>(), materials = new Set<T.Material>();
     for (const scene of [this.scene, this.cockpit, this.screen]) scene.traverse(o => { if (o instanceof T.Mesh) { geometries.add(o.geometry); for (const m of Array.isArray(o.material) ? o.material : [o.material]) materials.add(m); } });
-    geometries.forEach(g => g.dispose()); materials.forEach(m => m.dispose()); this.labels.forEach(t => t.dispose()); this.target.dispose(); this.renderer.dispose(); canvas.remove(); void this.audio?.close();
+    geometries.forEach(g => g.dispose()); materials.forEach(m => m.dispose()); this.labels.forEach(t => t.dispose()); this.tracerGeometry.dispose(); this.target.dispose(); this.renderer.dispose(); canvas.remove(); void this.audio?.close();
   }
 }

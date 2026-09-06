@@ -18,6 +18,7 @@ export class FlightSimulation {
   groundHeightAt: (x:number,z:number)=>number = () => 0;
   isWaterAt: (x:number,z:number)=>boolean = () => false;
   impactVelocity = new Vector3(); impactSpeed = 0; radiatorDrag = 0;
+  groundSpeed = 0; lateralSpeed = 0; groundLoad = 0; propClearance = Infinity;
   crashCause = '';
   position = new Vector3(0, SPEC.groundHeight, 330);
   velocity = new Vector3(); orientation = new Quaternion(); rates = new Vector3();
@@ -33,6 +34,7 @@ export class FlightSimulation {
   private angles = new Euler(0, 0, 0, 'YXZ'); private cranking = 0;
   private previousPosition = new Vector3(); private previousOrientation = new Quaternion();
   private groundNormal = new Vector3(0,1,0);
+  private propTip = new Vector3(); private skidTime = 0;
   get mass() { return this.spec.dryMass + this.fuel * .72 + this.spec.bombs * 30; }
   get indicatedAirspeed() { return this.airspeed * Math.sqrt(Math.exp(-Math.max(0, this.position.y) / 8500)); }
   reset() {
@@ -42,6 +44,7 @@ export class FlightSimulation {
     this.airspeed = 0; this.lift = 0; this.drag = 0; this.thrust = 0; this.grounded = true; this.crashed = false;
     this.stall = false; this.engine = 'off'; this.cranking = 0; this.crashCause = '';
     this.impactSpeed = 0; this.impactVelocity.set(0,0,0); this.radiatorDrag = 0;
+    this.groundSpeed = 0; this.lateralSpeed = 0; this.groundLoad = 0; this.propClearance = Infinity; this.skidTime = 0;
     this.scenery.setAircraftScale(this.spec.span/8.8, this.spec.length);
   }
   private crash(cause:string, speed:number) {
@@ -105,16 +108,33 @@ export class FlightSimulation {
       this.groundNormal.set(this.groundHeightAt(x-2,z)-this.groundHeightAt(x+2,z),4,this.groundHeightAt(x,z-2)-this.groundHeightAt(x,z+2)).normalize();
       const groundPitch=Math.atan2(-(this.groundNormal.x*this.forward.x+this.groundNormal.z*this.forward.z),this.groundNormal.y);
       const groundRoll=Math.atan2(-(this.groundNormal.x*this.right.x+this.groundNormal.z*this.right.z),this.groundNormal.y);
-      this.rates.z = -(this.angles.z-groundRoll) * 6;
-      this.rates.y = -c.roll * clamp(this.airspeed / 20, 0, 1) * .22;
+      this.groundSpeed=Math.hypot(this.velocity.x,this.velocity.z);
+      this.lateralSpeed=this.velocity.dot(this.right);
+      // A steerable tail skid is useful at taxi speed, but it cannot make a
+      // narrow-track taildragger corner like a car. At speed the tyres first
+      // scrub, then the undercarriage trips into a ground loop.
+      const steerAuthority=clamp(this.groundSpeed/10,0,1) * (.34-.18*clamp((this.groundSpeed-12)/24,0,1));
+      const steerTarget=-c.roll*steerAuthority;
+      this.rates.y+=(steerTarget-this.rates.y)*Math.min(1,dt*7);
+      const lateralDemand=Math.abs(steerTarget*this.groundSpeed);
+      this.groundLoad=Math.hypot(lateralDemand,Math.abs(this.lateralSpeed)*1.6);
+      const overloaded=this.groundSpeed>20 && this.groundLoad>3.8;
+      this.skidTime=overloaded?this.skidTime+dt*Math.min(2,this.groundLoad/3.8):Math.max(0,this.skidTime-dt*2.5);
+      const trip=clamp(this.skidTime/.38,0,1);
+      this.rates.z = -(this.angles.z-groundRoll) * (6-trip*4) + Math.sign(c.roll||this.lateralSpeed)*trip*.75;
       const groundPitchError=this.angles.x-groundPitch;
       if (this.airspeed < 16) this.rates.x = -groundPitchError * 5;
-      // Ground support may raise a nose-low attitude, but must not replace a
-      // stronger elevator command. Otherwise leveling approaches zero from
-      // below forever and prevents rotation after a nose-low touchdown.
-      else if (groundPitchError < 0) this.rates.x = Math.max(this.rates.x, -groundPitchError * 5);
+      // At taxi speed the gear holds the normal three-point attitude. Once
+      // airflow builds, forward elevator can lift the tail and pivot the
+      // aircraft around its main wheels. Ground support still pushes back,
+      // so the nose settles at a load-dependent angle unless the prop hits.
+      else if (groundPitchError < 0) {
+        const tailLift=clamp(-c.pitch,0,1)*clamp((this.groundSpeed-12)/18,0,1)*.75;
+        this.rates.x = Math.max(this.rates.x, -groundPitchError * 5-tailLift);
+      }
       this.rates.x = clamp(this.rates.x, -.12, .18);
       if (groundPitchError > .22 && this.rates.x > 0) this.rates.x = 0;
+      if(this.skidTime>.38){this.crash('GROUND LOOP',Math.sqrt(this.groundSpeed*this.groundSpeed+this.groundLoad*this.groundLoad));return;}
     }
     this.rotation.setFromEuler(this.angles.set(this.rates.x * dt, this.rates.y * dt, this.rates.z * dt, 'YXZ'));
     this.orientation.multiply(this.rotation).normalize(); this.velocity.addScaledVector(this.acceleration, dt);
@@ -122,6 +142,10 @@ export class FlightSimulation {
       const horizontal = Math.hypot(this.velocity.x, this.velocity.z);
       const friction = (c.brake ? 5.5 : .18) * dt;
       if (horizontal > 0) { const scale = Math.max(0, horizontal - friction) / horizontal; this.velocity.x *= scale; this.velocity.z *= scale; }
+      // Tyre scrub turns some sideways motion into heat, rather than silently
+      // rotating the velocity vector with the fuselage.
+      const side=this.velocity.dot(this.right),sideGrip=Math.min(Math.abs(side),3.2*dt);
+      this.velocity.addScaledVector(this.right,-Math.sign(side)*sideGrip);
     }
     this.position.addScaledVector(this.velocity, dt);
     const obstacle = this.scenery.sweep(this.previousPosition, this.position, this.previousOrientation, this.orientation);
@@ -137,8 +161,19 @@ export class FlightSimulation {
       this.angles.setFromQuaternion(this.orientation, 'YXZ');
       this.groundNormal.set(this.groundHeightAt(x-2,z)-this.groundHeightAt(x+2,z),4,this.groundHeightAt(x,z-2)-this.groundHeightAt(x,z+2)).normalize();
       const descent=this.velocity.dot(this.groundNormal);
-      if(water || (!this.grounded && (descent < -3.6 || Math.abs(this.angles.z)>.38 || this.angles.x<-.2))) this.crash(water?'WATER':'HARD LANDING',Math.sqrt(descent*descent+this.velocity.lengthSq()*.2));
+      const touchdownLimit=3.6-.9*clamp((Math.hypot(this.velocity.x,this.velocity.z)-25)/20,0,1);
+      if(water || (!this.grounded && (descent < -touchdownLimit || Math.abs(this.angles.z)>.38 || this.angles.x<-.2))) this.crash(water?'WATER':'HARD LANDING',Math.sqrt(descent*descent+this.velocity.lengthSq()*.2));
       this.position.y=ground;this.velocity.addScaledVector(this.groundNormal,Math.max(0,-this.velocity.dot(this.groundNormal)));this.grounded=true;
     } else if (this.position.y > ground + .08) this.grounded = false;
+    if(this.grounded&&!this.crashed){
+      // The visible blade is 0.9 m long. A small allowance represents blade
+      // flex and tyre/suspension travel before a definite strike is registered.
+      this.propClearance=Infinity;
+      for(const sign of[-1,1]){
+        this.propTip.set(0,sign*.78,-3.52*this.spec.length).applyQuaternion(this.orientation).add(this.position);
+        this.propClearance=Math.min(this.propClearance,this.propTip.y-this.groundHeightAt(this.propTip.x,this.propTip.z));
+      }
+      if(this.propClearance<=0 && (this.rpm>120 || this.groundSpeed>4))this.crash('PROP STRIKE',Math.max(this.groundSpeed,this.rpm/30));
+    }else this.propClearance=Infinity;
   }
 }

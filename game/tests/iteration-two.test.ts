@@ -94,6 +94,13 @@ test('harder crashes create more pieces, throw and roll camera, settle and clean
   assert.ok(debrisCount(10000)<=96);fx.dispose();assert.equal(scene.children.length,1);
   aircraft.traverse(o=>{if(o instanceof T.Mesh)o.geometry.dispose();});material.dispose();
 });
+test('detached propeller uses debris physics without throwing the pilot',()=>{
+  const scene=new T.Scene(),part=new T.Group(),camera=new T.PerspectiveCamera(),material=new T.MeshLambertMaterial();
+  part.add(new T.Mesh(new T.BoxGeometry(.13,1.8,.08),material));part.position.set(0,2,-3);scene.add(part);
+  const fx=new CrashEffects(scene,()=>0);const before=camera.position.clone();fx.detach(part,new T.Vector3(0,0,-20),20);
+  assert.equal(part.visible,false);assert.equal(fx.active,true);assert.equal(fx.pieceCount,1);fx.update(1,camera);
+  assert.equal(camera.position.distanceTo(before),0);fx.reset();assert.equal(part.visible,true);fx.dispose();part.children.forEach(o=>{if(o instanceof T.Mesh)o.geometry.dispose();});material.dispose();
+});
 test('debris bounces and comes to rest on elevated terrain',()=>{
   const body={position:new T.Vector3(0,100,0),velocity:new T.Vector3(20,-40,10),rotation:new T.Quaternion(),spin:new T.Vector3(2,5,3),radius:.2,asleep:false};
   for(let i=0;i<30/DT;i++)stepBody(body,DT,()=>80);
