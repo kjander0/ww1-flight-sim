@@ -91,6 +91,10 @@ export class FlightSimulation {
     this.temperature = Math.max(15, this.temperature + (heating - cooling) * dt);
     if (this.temperature > 110) this.health = Math.max(0, this.health - (this.temperature - 110) * .00008 * dt);
     if (this.rpm > 2100) this.health = Math.max(0, this.health - .001 * dt);
+    // Prolonged rich/lean running fouls plugs, washes cylinders, or drives a
+    // damaging lean burn. A small error is harmless; gross mismanagement is not.
+    if (running && this.mixtureEfficiency < .55)
+      this.health = Math.max(0, this.health - (.55 - this.mixtureEfficiency) * .006 * dt);
     const aero = coefficients(this.alpha); const q = .5 * density * this.airspeed * this.airspeed;
     this.lift = q * this.spec.wingArea * aero.cl;
     this.radiatorDrag = q * this.spec.wingArea * c.radiator * .007;
@@ -174,8 +178,9 @@ export class FlightSimulation {
       // The visible blade is 0.9 m long. A small allowance represents blade
       // flex and tyre/suspension travel before a definite strike is registered.
       this.propClearance=Infinity;
-      for(const sign of[-1,1]){
-        this.propTip.set(0,sign*.78,-3.52*this.spec.length).applyQuaternion(this.orientation).add(this.position);
+      const engines=this.aircraftType==='bomber'?[-this.spec.span*.18,this.spec.span*.18]:[0];
+      for(const x of engines)for(const sign of[-1,1]){
+        this.propTip.set(x,(this.aircraftType==='bomber'?.38:0)+sign*(this.aircraftType==='bomber'?.9:.78),this.aircraftType==='bomber'?-2.82:-3.52*this.spec.length).applyQuaternion(this.orientation).add(this.position);
         this.propClearance=Math.min(this.propClearance,this.propTip.y-this.groundHeightAt(this.propTip.x,this.propTip.z));
       }
       if(this.propClearance<=0 && (this.rpm>120 || this.groundSpeed>4))this.crash('PROP STRIKE',Math.max(this.groundSpeed,this.rpm/30));

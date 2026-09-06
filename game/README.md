@@ -4,7 +4,7 @@
 
 Four aircraft per team, including the player: one player and seven AI pilots. First team to 100 points wins. Each enemy aircraft crash awards 5 points, irrespective of cause; bombing an enemy hangar or tower awards 5 points once per destroyed building. Friendly building destruction earns nothing. Both scores reaching 100 in the same tick is a draw. Finished matches freeze weapons, physics, reinforcements and scoring.
 
-The bomber carries four 30 kg bombs, two beneath each wing. The cockpit BOMB RELEASE button, HUD button, or G drops one at a time, alternating wings. Release is inhibited on the ground and debounced. Bombs inherit aircraft velocity, fall under gravity/drag, sweep terrain/buildings and produce a blast. Released racks disappear and payload mass decreases. Bombed buildings become rubble and lose their intact collision volume.
+The bomber carries four 30 kg bombs, two beneath each wing. The cockpit BOMB RELEASE button or minimal HUD button drops one at a time, alternating wings. Release is inhibited on the ground and debounced. Bombs inherit aircraft velocity, fall under gravity/drag, sweep terrain/buildings and produce a blast. Released racks disappear and payload mass decreases. Bombed buildings become rubble and lose their intact collision volume.
 
 AI uses the same flight simulation and machine-gun ballistics as the player, with pursuit/lead, bursts, jam clearing, engine management, turning and diving attacks, overshoot attempts, terrain avoidance and bombing passes. Bomber rear gunners have a rear-upper firing arc and hold fire for friendly aircraft in their lane. Aircraft hits use swept moving collision boxes and airframe health. Player gun cocking, heat, dispersion and 500-round belts remain intact.
 
@@ -34,10 +34,10 @@ unchanged.
 ## Fly
 
 - Initial spawn chooses a random aircraft and Allied airfield. NEW MATCH lets you select any aircraft and any of the four strips; the selected airfield determines your team.
-- Click IGNITION (or I), release BRAKE (or B), and drag the throttle upward. Its grip follows the closest reachable mouse position along the lever arc. Left and right mouse buttons each keep a hand on their last selected control; repeat that button anywhere to use the same control again, or click a different control to move that hand. Both buttons can be held together: while one hand is active, the other button keeps its existing binding so you can fly and fire simultaneously.
+- Click IGNITION, release BRAKE, and drag the throttle upward. Its grip follows the closest reachable mouse position along the lever arc. Left and right mouse buttons each keep a hand on their last selected control; repeat that button anywhere to use the same control again, or click a different control to move that hand. Both buttons can be held together: while one hand is active, the other button keeps its existing binding so you can fly and fire simultaneously.
 - Grab a wheel and circle its centre: clockwise enriches mixture or opens radiator. One and a half turns covers the full range. Start with mixture near 85% and radiator near 50%; radiator opening increases both cooling and drag.
 - At about 85 km/h in the scout, or 95 km/h in the fighter/bomber, drag the yoke downward gently to pull up. About 35% pitch works for the scripted departure.
-- Drag yoke sideways to bank. Controls retain their settings; X centers the yoke. WASD looks around and C recenters. LEVEL shows aircraft pitch/roll independently of head direction.
+- Drag yoke sideways to bank. Controls retain their settings. WASD is the only keyboard control and looks around. LEVEL shows aircraft pitch/roll independently of head direction.
 - MAP shows heading, position, river and airfields. Altitude is metres above sea level; airfields sit at different elevations.
 - Clear fields permit landing and takeoff. Terrain, trees, buildings, water and hard landings can cause crashes. Impact severity determines the number of debris pieces; the pilot viewpoint is thrown out and rolls before settling.
 - R / RESPAWN restores a crashed aircraft after its countdown, preserving scores. Pause, help and the new-match menu stop simulation; background tabs pause automatically. Engine audio begins after cockpit input.

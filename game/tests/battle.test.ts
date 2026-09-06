@@ -57,9 +57,17 @@ test('crashes score once, delayed player respawn retains score, and completed ma
   const positions=b.planes.map(p=>p.sim.position.clone()),time=b.time;player.sim.crash('AFTER RESULT');ticks(b,30);assert.equal(b.time,time);assert.equal(b.scores.CENTRAL,5);assert.equal(b.release(),false);assert.equal(b.respawnPlayer(),false);b.planes.forEach((p,i)=>assert.ok(p.sim.position.equals(positions[i])));
   const tie=match();tie.scores={ALLIED:95,CENTRAL:95};tie.planes[0].sim.crash('TIE');tie.planes[4].sim.crash('TIE');tie.step();assert.equal(tie.winner,'DRAW');
 });
+test('abandoning the player aircraft records exactly one loss',()=>{
+  const b=match(),player=b.planes[0];assert.equal(b.retirePlayer(),true);assert.equal(player.sim.crashCause,'ABANDONED AIRCRAFT');assert.equal(b.scores.CENTRAL,5);assert.equal(b.retirePlayer(),true);assert.equal(b.scores.CENTRAL,5);
+});
 test('existing gun projectiles sweep moving aircraft, stop on contact and produce a scored kill',()=>{
   const b=match(),shooter=b.planes[0],victim=b.planes[4];victim.sim.position.set(0,800,0);victim.sim.orientation.identity();victim.sim.velocity.set(0,0,-35);victim.sim.airframeHealth=.17;
   shooter.gun.projectiles.push({position:new T.Vector3(0,800,6),previous:new T.Vector3(0,800,6),velocity:new T.Vector3(0,0,-650),age:0,tracer:true});b.step();assert.equal(victim.sim.crashCause,'SHOT DOWN');assert.equal(shooter.gun.projectiles.length,0);assert.equal(b.scores.ALLIED,5);b.step();assert.equal(b.scores.ALLIED,5);
+});
+test('aircraft break evasively after taking fire and impacts feed the shared effects queue',()=>{
+  const b=match(),ai=b.planes[4];ai.departure='flying';ai.sim.grounded=false;ai.sim.position.set(0,600,0);ai.sim.velocity.set(0,0,-42);ai.sim.airspeed=42;ai.sim.damage(.18);
+  (b as unknown as {flyAI:(p:typeof ai,dt:number)=>void}).flyAI(ai,DT);assert.equal(ai.mode,'EVASIVE BREAK');assert.ok(ai.evasiveUntil>b.time);
+  const shooter=b.planes[0];shooter.gun.projectiles.push({position:new T.Vector3(0,600,8),previous:new T.Vector3(0,600,8),velocity:new T.Vector3(0,0,-650),age:0,tracer:true});b.step();const effects=b.consumeEffects();assert.ok(effects.some(e=>e.kind==='hit'));assert.ok(effects.some(e=>e.kind==='damage'));
 });
 test('rear gunner fires only into clear rear-upper arc and respects own tail and friendlies',()=>{
   const b=match(),bomber=b.planes[3],target=b.planes[4];bomber.sim.position.set(0,1000,0);bomber.sim.orientation.identity();bomber.sim.velocity.set(0,0,-40);target.sim.position.set(0,1015,150);target.sim.velocity.set(0,0,-40);

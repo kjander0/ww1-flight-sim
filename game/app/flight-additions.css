@@ -20,3 +20,10 @@
 .hangar-menu { top: 5vh !important; left: 0 !important; right: 0 !important; width: min(390px, calc(100vw - 48px)) !important; margin-inline: auto; --tw-translate-x: 0px !important; --tw-translate-y: 0px !important; transform: none !important; max-height: 90vh; overflow-y: auto; background: #15241ef2; }
 body:has(.hangar-menu) [data-slot="dialog-overlay"] { background: #00000012; backdrop-filter: none; }
 .hangar-menu [data-slot="dialog-close"] { display: none; }
+
+.mini-map{position:absolute;left:16px;top:16px;width:158px;padding:8px 10px 3px;background:#10201ccc;border:1px solid #9aa78b55;box-shadow:0 8px 30px #08120d55;pointer-events:none}
+.mini-map .navigation-map{width:100%;margin:0}.mini-map .navigation-map text{font-size:6px}
+.minimal-score{position:absolute;left:50%;top:12px;transform:translateX(-50%);display:flex;align-items:center;gap:9px;padding:6px 10px;background:#10201ca8;border:1px solid #9aa78b3d;font:11px monospace;letter-spacing:.7px;pointer-events:none}.minimal-score .allied{color:#91d4e4}.minimal-score .central{color:#f1a483}.minimal-score i{width:1px;height:13px;background:#9aa78b55}
+.flight-tools{position:absolute;right:16px;bottom:16px;display:flex;gap:5px;background:#10201cae;border:1px solid #9aa78b44;padding:4px}.flight-tools button{height:30px;padding:0 10px;font:10px monospace;letter-spacing:.8px}
+.hangar-briefing{display:grid;grid-template-columns:1fr 1fr;gap:8px}.hangar-briefing>div,.hangar-instructions{display:flex;flex-direction:column;gap:5px;padding:10px 12px;background:#0f1e1a;border:1px solid #82927145}.hangar-briefing span,.hangar-instructions>strong{font:9px monospace;letter-spacing:1.3px;color:#d6c585}.hangar-briefing strong{font:12px monospace}.hangar-briefing small,.hangar-instructions small{font:10px/1.35 monospace;color:#aeb8aa}.hangar-instructions{margin-top:8px}.hangar-instructions>span{font-size:12px;line-height:1.4}
+@media(max-width:620px){.mini-map{width:125px;left:8px;top:8px}.minimal-score{top:8px;font-size:9px}.flight-tools{right:8px;bottom:8px}.hangar-briefing{grid-template-columns:1fr}}

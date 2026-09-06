@@ -17,6 +17,9 @@ test('parked aircraft stays on its gear, engine off and full throttle with brake
   const s = new FlightSimulation(); run(s, 60); assert.equal(s.position.y, SPEC.groundHeight); assert.ok(s.position.distanceTo(new Vector3(0, SPEC.groundHeight, 330)) < .1);
   s.controls.ignition = true; s.controls.throttle = 1; run(s, 30); assert.ok(s.rpm > 1500); assert.ok(s.velocity.length() < .1); assert.equal(s.crashed, false);
 });
+test('sustained bad mixture damages a running engine',()=>{
+  const s=airborne();s.controls.ignition=true;s.controls.throttle=.7;s.controls.mixture=.55;s.engine='running';s.rpm=1600;const health=s.health;run(s,4);assert.ok(s.mixtureEfficiency<.55);assert.ok(s.health<health);
+});
 test('takeoff from a standing start before the runway end, followed by a stable climb', t => {
   const s = new FlightSimulation(); s.windEnabled = false; s.controls.ignition = true; s.controls.throttle = 1; s.controls.brake = false;
   let liftoffDistance: number | undefined;

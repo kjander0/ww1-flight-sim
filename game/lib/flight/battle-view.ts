@@ -2,6 +2,7 @@ import * as T from 'three';
 import { Battle, rackPosition, type Plane } from './battle';
 import { AIRCRAFT } from './aircraft';
 import { CrashEffects } from './crash';
+import { ParticleEffects } from './particles';
 
 export function haloStrength(distance:number){
   if(distance<=650)return .06;
@@ -21,7 +22,12 @@ function aircraftModel(p:Plane){
   box([1,.8,6*spec.length],[0,-.15,.1],body);for(const y of[-.3,1.48])box([spec.span,.1,1.6],[0,y,-1.4],canvas);
   box([2.5*spec.span/8.8,.08,.9],[0,-.25,4.1*spec.length],canvas);box([.09,1.15,.9],[0,.25,4.1*spec.length],team);
   for(const x of[-spec.span*.35,spec.span*.35]){box([.08,1.8,.08],[x,.6,-1.9],dark);box([.08,1.8,.08],[x,.6,-.9],dark);box([1,.025,.6],[x,1.55,-1.4],team);}
-  const prop=box([.12,1.8,.07],[0,0,-3.52],dark);box([.07,.07,2.5],[.34,.5,-2],dark);
+  const prop=new T.Group();g.add(prop);
+  if(p.sim.aircraftType==='bomber')for(const x of[-spec.span*.18,spec.span*.18]){
+    const nacelle=box([.85,.72,2.05],[x,.38,-1.75],body);nacelle.rotation.x=.02;
+    const spinner=new T.Group();spinner.position.set(x,.38,-2.82);prop.add(spinner);spinner.add(box([.12,2,.07],[0,0,0],dark));
+  }else {const spinner=new T.Group();spinner.position.set(0,0,-3.52);prop.add(spinner);spinner.add(box([.12,1.8,.07],[0,0,0],dark));}
+  box([.07,.07,2.5],[.34,.5,-2],dark);
   for(const x of[-.76,.76]){const wheel=new T.Mesh(new T.CylinderGeometry(.38,.38,.12,10),dark);wheel.rotation.z=Math.PI/2;wheel.position.set(x,-.77,-1.3);g.add(wheel);}
   if(p.sim.aircraftType==='bomber'){box([.35,.65,.35],[0,.45,2.4],dark);box([.07,.07,1.4],[.2,.65,3.1],dark);}
   const bombs:T.Group[]=[];for(let i=0;i<spec.bombs;i++){const b=bombModel();b.position.copy(rackPosition(i,spec.span));g.add(b);bombs.push(b);}return{g,prop,bombs};
@@ -31,8 +37,10 @@ export class BattleView {
   private root=new T.Group();private models=new Map<number,ReturnType<typeof aircraftModel>&{generation:number;effects:CrashEffects;camera:T.PerspectiveCamera}>();
   private bombMeshes=new Map<number,T.Group>();private blastMeshes=new Map<number,T.Mesh>();
   private blastGeometry=new T.IcosahedronGeometry(1,1);private blastMaterial=new T.MeshBasicMaterial({color:'#f0ae50',transparent:true,opacity:.8,depthWrite:false});
-  constructor(private scene:T.Scene,private battle:Battle){scene.add(this.root);for(const p of battle.planes.slice(1)){const model=aircraftModel(p);this.root.add(model.g);this.models.set(p.id,{...model,generation:p.generation,effects:new CrashEffects(scene,battle.surface),camera:new T.PerspectiveCamera()});}}
+  private particles:ParticleEffects;
+  constructor(private scene:T.Scene,private battle:Battle){scene.add(this.root);this.particles=new ParticleEffects(scene,battle.surface);for(const p of battle.planes.slice(1)){const model=aircraftModel(p);this.root.add(model.g);this.models.set(p.id,{...model,generation:p.generation,effects:new CrashEffects(scene,battle.surface),camera:new T.PerspectiveCamera()});}}
   update(dt:number,alpha:number,camera?:T.Camera){
+    for(const event of this.battle.consumeEffects())this.particles.emit(event);this.particles.update(dt,this.battle.planes);
     for(const p of this.battle.planes.slice(1)){const m=this.models.get(p.id)!;
       let halo=this.halos.get(p.id);
       if(!halo){halo=new T.Mesh(new T.PlaneGeometry(2,2),new T.ShaderMaterial({transparent:true,depthWrite:false,blending:T.AdditiveBlending,uniforms:{color:{value:new T.Color(p.team===this.battle.playerTeam?'#35ff67':'#ff352b')},strength:{value:.06}},vertexShader:'varying vec2 vUv; void main(){vUv=uv;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}',fragmentShader:'varying vec2 vUv; uniform vec3 color; uniform float strength; void main(){float r=length(vUv*2.0-1.0);float a=exp(-pow((r-0.72)/0.12,2.0))*strength;gl_FragColor=vec4(color,a);}'}));this.root.add(halo);this.halos.set(p.id,halo);}
@@ -40,7 +48,7 @@ export class BattleView {
       if(camera){const distance=camera.position.distanceTo(halo.position);halo.quaternion.copy(camera.quaternion);halo.scale.setScalar(Math.max(p.sim.spec.span*.58,distance*.006));(halo.material as T.ShaderMaterial).uniforms.strength.value=haloStrength(distance);}
       if(m.generation!==p.generation){m.effects.reset();m.g.visible=true;m.generation=p.generation;}
       m.g.position.lerpVectors(p.previous,p.sim.position,alpha);m.g.quaternion.slerpQuaternions(p.rotation,p.sim.orientation,alpha);
-      m.prop.rotation.z+=p.sim.rpm*Math.PI/30*dt;m.bombs.forEach((b,i)=>b.visible=i>=p.sim.spec.bombs-p.sim.bombsRemaining);
+      for(const spinner of m.prop.children)spinner.rotation.z+=p.sim.rpm*Math.PI/30*dt;m.bombs.forEach((b,i)=>b.visible=i>=p.sim.spec.bombs-p.sim.bombsRemaining);
       if(p.sim.crashed&&!m.effects.active){m.g.position.copy(p.sim.position);m.g.quaternion.copy(p.sim.orientation);m.camera.position.copy(p.sim.position);m.effects.start(m.g,p.sim.impactVelocity,p.sim.impactSpeed,m.camera);}
       m.effects.update(dt,m.camera);
     }
@@ -50,5 +58,5 @@ export class BattleView {
     for(const b of this.battle.blasts){let m=this.blastMeshes.get(b.id);if(!m){m=new T.Mesh(this.blastGeometry,this.blastMaterial.clone());this.root.add(m);this.blastMeshes.set(b.id,m);}m.position.copy(b.position);m.position.y+=b.age*4;m.scale.setScalar(2+Math.min(b.age,1.5)*15);const mat=m.material as T.MeshBasicMaterial;mat.color.set(b.age<.35?'#ffc563':'#595950');mat.opacity=Math.max(0,.8-b.age*.16);}
   }
   private disposeObject(o:T.Object3D){const mats=new Set<T.Material>();o.traverse(c=>{if(c instanceof T.Mesh){c.geometry.dispose();for(const m of Array.isArray(c.material)?c.material:[c.material])mats.add(m);}});mats.forEach(m=>m.dispose());o.removeFromParent();}
-  dispose(){for(const m of this.models.values())m.effects.dispose();this.disposeObject(this.root);this.blastGeometry.dispose();this.blastMaterial.dispose();}
+  dispose(){for(const m of this.models.values())m.effects.dispose();this.particles.dispose();this.disposeObject(this.root);this.blastGeometry.dispose();this.blastMaterial.dispose();}
 }

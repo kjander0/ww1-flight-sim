@@ -3,7 +3,7 @@ import * as T from 'three';
 export const MUZZLE_VELOCITY = 650;
 export const RATE_OF_FIRE = 10.5;
 export const PROJECTILE_LIFE = 4.5;
-export const AMMO_CAPACITY = 500;
+export const AMMO_CAPACITY = 250;
 
 export type Projectile = {
   position: T.Vector3;

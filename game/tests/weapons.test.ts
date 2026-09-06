@@ -51,7 +51,8 @@ void test('projectiles inherit aircraft motion, fall, slow, and stop at terrain'
   assert.equal(gun.impacts.length, 0);
 });
 
-void test('gun has a 500-round belt and cannot fire beyond it', () => {
+void test('gun has a 250-round belt and cannot fire beyond it', () => {
+  assert.equal(AMMO_CAPACITY, 250);
   const gun = new MachineGun(() => .5); gun.cock(); gun.trigger = true;
   gun.roundsRemaining = 2;
   gun.step(1, state);
