@@ -78,7 +78,7 @@ test('near miss outside blast radius leaves targets intact and high-speed terrai
   assert.notEqual(segmentSphere(new T.Vector3(-20,0,0),new T.Vector3(20,0,0),2),null);
 });
 test('crashes queue a delayed respawn while the world continues indefinitely',()=>{
-  const b=match(),player=b.planes[0];player.sim.crash('TEST');b.step();assert.equal(player.respawnQueued,true);assert.equal(b.respawnPlayer(),false);ticks(b,8.1);assert.equal(b.respawnPlayer(),true);assert.equal(b.respawnPlayer(),false);assert.equal(player.sim.bombsRemaining,4);
+  const b=match(),player=b.planes[0];player.sim.crash('TEST');b.step();assert.equal(player.respawnQueued,true);const crashEffects=b.consumeEffects().filter(effect=>effect.kind==='crash'&&effect.targetId===0);assert.equal(crashEffects.length,1);b.step();assert.equal(b.consumeEffects().filter(effect=>effect.kind==='crash'&&effect.targetId===0).length,0);assert.equal(b.respawnPlayer(),false);ticks(b,8.1);assert.equal(b.respawnPlayer(),true);assert.equal(b.respawnPlayer(),false);assert.equal(player.sim.bombsRemaining,4);
   const time=b.time;b.planes[4].sim.crash('TEST');ticks(b,30);assert.ok(b.time>time);assert.ok(b.planes[4].generation>0);
   player.sim.grounded=false;player.sim.position.y=500;player.cooldown=0;assert.equal(b.release(),true);
 });
@@ -106,7 +106,7 @@ test('rear gunner fires only into clear rear-upper arc and respects own tail and
   assert.equal(bomber.rear.muzzleVelocity,600);
   // Keep AI guidance out of this geometry/weapon test.
   const step=(b as unknown as {stepGun:(p:typeof bomber,g:MachineGun,rear:boolean,dt:number)=>void}).stepGun.bind(b);
-  for(let i=0;i<20;i++)step(bomber,bomber.rear,true,DT);assert.ok(bomber.rear.roundsFired>0);
+  for(let i=0;i<20;i++)step(bomber,bomber.rear,true,DT);assert.ok(bomber.rear.roundsFired>0);assert.ok(b.consumeEffects().some(effect=>effect.kind==='muzzle'&&effect.targetId===bomber.id));
   bomber.rear.reset();bomber.rear.cock();target.sim.position.set(0,1000,150);for(let i=0;i<20;i++)step(bomber,bomber.rear,true,DT);assert.equal(bomber.rear.roundsFired,0);
   target.sim.position.set(0,1020,-150);for(let i=0;i<20;i++)step(bomber,bomber.rear,true,DT);assert.equal(bomber.rear.roundsFired,0);
   target.sim.position.set(0,1015,150);const friend=b.planes[1];friend.sim.position.set(0,1007.5,75);for(let i=0;i<20;i++)step(bomber,bomber.rear,true,DT);assert.equal(bomber.rear.roundsFired,0);
@@ -122,7 +122,7 @@ test('battle models, bomb disappearance, crash effects and destroyed building vi
   const context=new Proxy({}, {get:()=>()=>{}});Object.defineProperty(globalThis,'document',{configurable:true,value:{createElement:()=>({width:0,height:0,getContext:()=>context})}});
   let world:WorldView|undefined,view:BattleView|undefined;
   try{world=new WorldView(scene,terrain,b.planes[0].sim.scenery);view=new BattleView(scene,b);view.update(0,1);const before=scene.children.length;
-    const camera=new T.PerspectiveCamera();camera.position.copy(b.planes[0].sim.position).add(new T.Vector3(0,.7,0));b.effects.push({kind:'damage',position:b.planes[0].sim.position.clone(),velocity:b.planes[0].sim.velocity.clone(),intensity:.8,targetId:0});assert.equal(view.update(0,1,camera),1);const particlePoints=scene.children.find(child=>child instanceof T.Points) as T.Points;assert.ok(particlePoints.geometry.drawRange.count>=30);
+    const camera=new T.PerspectiveCamera();camera.position.copy(b.planes[0].sim.position).add(new T.Vector3(0,.7,0));b.effects.push({kind:'damage',position:b.planes[0].sim.position.clone(),velocity:b.planes[0].sim.velocity.clone(),intensity:.8,targetId:0});assert.equal(view.update(0,1,camera),1);const particlePoints=scene.children.find(child=>child instanceof T.Points) as T.Points;assert.ok(particlePoints.geometry.drawRange.count>=30);b.planes[1].sim.airframeHealth=.35;b.planes[1].sim.engine='off';view.update(.5,1,camera);assert.ok(particlePoints.geometry.drawRange.count>0);
     b.planes[3].sim.crash('TEST');b.step();view.update(DT,1);b.buildings[0].destroyed=true;world.updateBuildings(b.buildings);ticks(b,8.2);view.update(DT,1);view.dispose();view=undefined;assert.ok(scene.children.length<before);
     const model=bombModel(),bounds=new T.Box3().setFromObject(model);assert.ok(bounds.getSize(new T.Vector3()).z>.9);model.traverse(o=>{if(o instanceof T.Mesh){o.geometry.dispose();(o.material as T.Material).dispose();}});
   }finally{view?.dispose();world?.dispose();scene.traverse(o=>{if(o instanceof T.Mesh)o.geometry.dispose();});if(old)Object.defineProperty(globalThis,'document',old);else Reflect.deleteProperty(globalThis,'document');}

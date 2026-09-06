@@ -25,6 +25,9 @@ export function resolveMouseControl<T>(picked:T|null,bound:T|null,chording:boole
 export function movePilotLateral(current:number,input:number,dt:number){return clamp(current+input*dt*.48,-.38,.38);}
 export function bombButtonAction(coverOpen:boolean):'open'|'release'{return coverOpen?'release':'open';}
 export function explosionLevel(distance:number){return clamp(1-distance/2000,0,1);}
+export function blastShakeAmount(distance:number){const proximity=clamp(1-distance/450,0,1);return proximity*proximity*1.2;}
+export function damageShakeKick(hits:number){return hits<=0?0:Math.min(1.15,.42+(hits-1)*.18);}
+export function crashShakeKick(speed:number){return clamp(speed/32,.55,1.65);}
 export function cockingJamKick(strength:number){const s=clamp(strength,0,1);return Math.sin((1-s)*45)*s;}
 export function gunBarrelAppearance(heat:number){
   const glow=clamp((heat-.2)/.8,0,1),orange=glow*glow;
@@ -67,7 +70,7 @@ export class FlightGame {
   private hover: Control | null = null;
   private yaw = 0; private pitch = -.23;private pilotLateral=0; private frame = 0; private last = 0; private accumulator = 0; private reportTime = 0;
   private prevPosition = new T.Vector3(); private prevRotation = new T.Quaternion(); private look = new T.Quaternion();
-  private shakeOffset=new T.Vector3();private shakeRotation=new T.Quaternion();private shakeEuler=new T.Euler(0,0,0,'YXZ');
+  private shakeOffset=new T.Vector3();private shakeRotation=new T.Quaternion();private shakeEuler=new T.Euler(0,0,0,'YXZ');private impactShake=0;private wasCrashed=false;
   private propeller = new T.Group(); private resizeObserver: ResizeObserver;
   private labels: T.Texture[] = []; private fps = 60;
   readonly gun = new MachineGun();
@@ -357,7 +360,7 @@ export class FlightGame {
     if(!this.started)return false;const runway=stoppedRunway(this.sim),safe=runway>=0;
     if(!safe)this.battle.retirePlayer();this.blur();return !safe;
   }
-  private resetView() { this.crashEffects.reset();this.aircraft.visible=true;this.propeller.visible=true;this.cockTravel=0;this.cockRatchet=0;this.gunRecoil=0;this.shownRounds=0;this.gunWasJammed=false;this.gunJamShake=0;this.leftCockTravel=0;this.leftCockRatchet=0;this.leftGunRecoil=0;this.leftShownRounds=0;this.leftGunWasJammed=false;this.leftGunJamShake=0;this.bombCoverOpen=false;this.bombHand=null;this.heardBlasts.clear(); this.prevPosition.copy(this.sim.position); this.prevRotation.copy(this.sim.orientation); this.yaw = 0; this.pitch = -.23;this.pilotLateral=0;this.loopRotation=0; this.accumulator = 0; this.blur();this.hover=null; }
+  private resetView() { this.crashEffects.reset();this.aircraft.visible=true;this.propeller.visible=true;this.cockTravel=0;this.cockRatchet=0;this.gunRecoil=0;this.shownRounds=0;this.gunWasJammed=false;this.gunJamShake=0;this.leftCockTravel=0;this.leftCockRatchet=0;this.leftGunRecoil=0;this.leftShownRounds=0;this.leftGunWasJammed=false;this.leftGunJamShake=0;this.bombCoverOpen=false;this.bombHand=null;this.heardBlasts.clear();this.impactShake=0;this.wasCrashed=false; this.prevPosition.copy(this.sim.position); this.prevRotation.copy(this.sim.orientation); this.yaw = 0; this.pitch = -.23;this.pilotLateral=0;this.loopRotation=0; this.accumulator = 0; this.blur();this.hover=null; }
   startSortie(type:AircraftType,airfieldIndex:number){
     if(!(type in AIRCRAFT)||!Number.isInteger(airfieldIndex)||airfieldIndex<0||airfieldIndex>=AIRFIELDS.length)throw new Error('Invalid aircraft or airfield');
     const parking=parkingPosition(this.terrain,airfieldIndex);
@@ -494,8 +497,11 @@ export class FlightGame {
       }
     }
     this.camera.updateMatrixWorld();
-    const activeBlasts=new Set<number>();for(const blast of this.battle.blasts){activeBlasts.add(blast.id);if(!this.heardBlasts.has(blast.id)){this.heardBlasts.add(blast.id);this.playExplosion(this.camera.position.distanceTo(blast.position));}}if(this.heardBlasts.size>64)for(const id of this.heardBlasts)if(!activeBlasts.has(id))this.heardBlasts.delete(id);
-    const playerHits=this.battleView.update(active?elapsed:0,active?this.accumulator/DT:1,this.camera);if(playerHits>0)this.playPlaneHit(playerHits);this.world.updateBuildings(this.battle.buildings);this.bombRacks.forEach((b,i)=>b.visible=i>=this.sim.spec.bombs-this.sim.bombsRemaining);
+    const activeBlasts=new Set<number>();for(const blast of this.battle.blasts){activeBlasts.add(blast.id);if(!this.heardBlasts.has(blast.id)){this.heardBlasts.add(blast.id);const distance=this.camera.position.distanceTo(blast.position);this.playExplosion(distance);this.impactShake=Math.max(this.impactShake,blastShakeAmount(distance));}}if(this.heardBlasts.size>64)for(const id of this.heardBlasts)if(!activeBlasts.has(id))this.heardBlasts.delete(id);
+    const playerHits=this.battleView.update(active?elapsed:0,active?this.accumulator/DT:1,this.camera);if(playerHits>0){this.playPlaneHit(playerHits);this.impactShake=Math.min(1.75,this.impactShake+damageShakeKick(playerHits));}
+    if(this.sim.crashed&&!this.wasCrashed)this.impactShake=Math.max(this.impactShake,crashShakeKick(this.sim.impactSpeed));this.wasCrashed=this.sim.crashed;
+    if(active&&this.previewField===null&&this.impactShake>.001){const strength=this.impactShake,translation=.032*strength,rotation=.012*strength;this.shakeOffset.set(Math.sin(now*.31)+Math.sin(now*.73)*.45,Math.cos(now*.39)+Math.sin(now*.91)*.3,Math.sin(now*.57)*.35).multiplyScalar(translation).applyQuaternion(this.camera.quaternion);this.camera.position.add(this.shakeOffset);this.shakeEuler.set(Math.sin(now*.47)*rotation,Math.cos(now*.61)*rotation*.75,Math.sin(now*.83)*rotation*1.15,'YXZ');this.shakeRotation.setFromEuler(this.shakeEuler);this.camera.quaternion.multiply(this.shakeRotation);this.impactShake*=Math.exp(-elapsed*(this.sim.crashed?2.5:5.8));this.camera.updateMatrixWorld();}
+    this.world.updateBuildings(this.battle.buildings);this.bombRacks.forEach((b,i)=>b.visible=i>=this.sim.spec.bombs-this.sim.bombsRemaining);
     for (const g of this.gauges) g.needle.rotation.z = (135 - clamp(g.read() / g.max, 0, 1) * 270) * Math.PI / 180;
     if(this.attitude){const a=readAttitude(this.sim.orientation);this.attitude.uniforms.pitch.value=a.pitch;this.attitude.uniforms.roll.value=a.roll;}
     const c = this.sim.controls;

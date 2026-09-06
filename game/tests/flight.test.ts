@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Euler, Vector3, PerspectiveCamera, Quaternion } from 'three';
 import { BRAKE_DECELERATION, FlightSimulation, DT, SPEC, coefficients, optimalMixture } from '../lib/flight/simulation';
-import { BRAKE_SHAKE_RPM, PILOT_HEIGHT, brakeButtonPose, bombButtonAction, cockingJamKick, explosionLevel, gunBarrelAppearance, movePilotLateral, overspeedShakeAmount, resolveMouseControl } from '../lib/flight/game';
+import { BRAKE_SHAKE_RPM, PILOT_HEIGHT, blastShakeAmount, brakeButtonPose, bombButtonAction, cockingJamKick, crashShakeKick, damageShakeKick, explosionLevel, gunBarrelAppearance, movePilotLateral, overspeedShakeAmount, resolveMouseControl } from '../lib/flight/game';
 import { AIRCRAFT } from '../lib/flight/aircraft';
 
 function run(s: FlightSimulation, seconds: number, control?: (s: FlightSimulation) => void) {
@@ -21,6 +21,11 @@ test('covered bomb release requires one click to open before it can release',()=
 });
 test('distant explosions attenuate continuously to silence',()=>{
   assert.equal(explosionLevel(0),1);assert.equal(explosionLevel(1000),.5);assert.equal(explosionLevel(2000),0);assert.equal(explosionLevel(8000),0);
+});
+test('combat camera impulses are local, bounded, and scale with severity',()=>{
+  assert.equal(blastShakeAmount(450),0);assert.ok(blastShakeAmount(50)>blastShakeAmount(300));
+  assert.equal(damageShakeKick(0),0);assert.ok(damageShakeKick(3)>damageShakeKick(1));assert.ok(damageShakeKick(20)<=1.15);
+  assert.ok(crashShakeKick(60)>crashShakeKick(12));assert.ok(crashShakeKick(500)<=1.65);
 });
 function airborne() { const s = new FlightSimulation(); s.windEnabled = false; s.position.set(0, 500, 0); s.velocity.set(0, 0, -40); s.grounded = false; return s; }
 test('brake holds an unpowered aircraft but full engine power can overcome it', () => {

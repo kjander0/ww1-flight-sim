@@ -55,6 +55,7 @@ unchanged.
 - Four airfields, river valley, villages/roads, team markings, procedural signs and instanced crossed-quad trees in spatial batches. Runways and extended approaches exclude trees.
 - Ground contact and rolling friction, braking, damaging touchdowns, swept aircraft/scenery collisions and spatial broad-phase filtering. Aircraft collision width adapts to the wider bomber.
 - Severity-scaled crash fragmentation (12–96 box fragments derived from the airframe), ballistic motion, bounce/friction and sleeping. Pilot-camera ejection/tumble; reset clears effects and restores the aircraft.
+- Damage and combat feedback includes persistent engine smoke and embers, muzzle flashes, cockpit splinters, ground-roll dust, terrain strikes, water splashes, bomb blasts, crash bursts, and severity-scaled camera shake for hits, nearby explosions and crashes.
 - Two-pass rendering: world at 420 pixels vertically with nearest-neighbour upscale, cockpit separately for readable text. Models, textures, instrument faces and signs are generated at runtime without external assets.
 - Optional feature-detected WebMCP instrument readback and sortie reset, sharing actual game state.
 
@@ -64,7 +65,7 @@ Flight regression checks include all twelve aircraft/airfield departure combinat
 
 The generated-world test constructs actual geometry with canvas drawing stubbed, checks 256 chunks and four LODs per chunk, matches rendered airfield surfaces to physics heights, and checks runway/approach clearance with bomber collision dimensions. Bomber takeoff trajectories are also checked against the generated scenery. This is geometry/physics validation, not browser visual QA. TypeScript, production build and a local HTTP route response are checked separately.
 
-Map-edge warning and a 700 m out-of-bounds margin precede an aircraft loss. Smoke/leak particles, detailed component damage, AI landing/rearming and advanced tactics remain future work. Bullet cover includes terrain and airfield buildings; decorative trees and village houses are not yet bullet cover. Aircraft still collide with their scenery proxies. Wreckage uses simple visual physics.
+Map-edge warning and a 700 m out-of-bounds margin precede an aircraft loss. Detailed fluid leaks and component damage, AI landing/rearming and advanced tactics remain future work. Bullet cover includes terrain and airfield buildings; decorative trees and village houses are not yet bullet cover. Aircraft still collide with their scenery proxies. Wreckage uses simple visual physics.
 
 Flight coefficients are gameplay parameters, not verified historical aircraft data. Ground contact uses a terrain non-penetration constraint rather than separate wheel suspension; terrain strikes are checked at the aircraft centre/gear, while scenery uses overlapping swept spheres. The larger airframes use slightly conservative collision radii. Debris uses boxes and a single ground radius per piece. Manual full circuits, cockpit visual checks and hardware performance benchmarking have not been recorded for this iteration. Optional WebMCP tools remain unverified in a supporting browser.
 

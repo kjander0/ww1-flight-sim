@@ -17,7 +17,7 @@ export type ParkedPlane={id:string;team:Team;type:AircraftType;position:T.Vector
 export type Plane={id:number;team:Team;sim:FlightSimulation;gun:MachineGun;secondary:MachineGun;rear:MachineGun;previous:T.Vector3;rotation:T.Quaternion;generation:number;respawnQueued:boolean;respawnAt:number;mode:string;target:number;decision:number;cooldown:number;runTarget:string;runStage:'approach'|'pass'|'egress'|'dogleg';homeField:number;departure:'waiting'|'taxi'|'lineup'|'takeoff'|'climb'|'flying';previousHealth:number;evasiveUntil:number;evasiveDirection:number;evasiveDive:number;evasiveTurnAt:number};
 export type Bomb={id:number;ownerId:number;team:Team;position:T.Vector3;previous:T.Vector3;velocity:T.Vector3;age:number};
 export type Blast={id:number;position:T.Vector3;age:number};
-export type EffectEvent={kind:'hit'|'damage'|'explosion';position:T.Vector3;velocity:T.Vector3;intensity:number;targetId?:number};
+export type EffectEvent={kind:'hit'|'damage'|'muzzle'|'crash'|'explosion';position:T.Vector3;velocity:T.Vector3;intensity:number;targetId?:number;cause?:string};
 export type BattleInfo={team:Team;counts:Record<Team,number>;bombs:number;ammo:number;health:number;respawn:number;message:string;enemyBuildingsBombed:number;enemyAircraftStrafed:number;enemyAircraftKills:number;enemyAircraftBombed:number;contacts:{id:number;team:Team;x:number;z:number}[]};
 
 export function createBuildings(terrain:Terrain):Building[]{return AIRFIELDS.flatMap((f,index)=>{
@@ -87,7 +87,7 @@ export class Battle {
     const index=s.spec.bombs-s.bombsRemaining,position=rackPosition(index,s.spec.span).applyQuaternion(s.orientation).add(s.position);
     this.bombs.push({id:++this.serial,ownerId:p.id,team:p.team,position,previous:position.clone(),velocity:s.velocity.clone().add(new T.Vector3(0,-1,0)),age:0});s.bombsRemaining--;p.cooldown=.3;return true;
   }
-  private recordCrashes(){for(const p of this.planes)if(p.sim.crashed&&!p.respawnQueued){p.respawnQueued=true;p.respawnAt=this.time+RESPAWN_DELAY;}}
+  private recordCrashes(){for(const p of this.planes)if(p.sim.crashed&&!p.respawnQueued){p.respawnQueued=true;p.respawnAt=this.time+RESPAWN_DELAY;if(p.sim.crashCause!=='ABANDONED AIRCRAFT')this.pushEffect({kind:'crash',position:p.sim.position.clone(),velocity:p.sim.impactVelocity.clone(),intensity:clamp(p.sim.impactSpeed/45,.35,1.4),targetId:p.id,cause:p.sim.crashCause});}}
   step(dt=DT){
     this.time+=dt;
     for(const p of this.planes){p.cooldown=Math.max(0,p.cooldown-dt);if(p.sim.crashed&&p.id!==0&&p.respawnQueued&&this.time>=p.respawnAt)this.spawn(p);p.previous.copy(p.sim.position);p.rotation.copy(p.sim.orientation);if(p.id!==0&&!p.sim.crashed)this.flyAI(p,dt);this.scenery?.setAircraftScale(p.sim.spec.span/8.8,p.sim.spec.length);p.sim.step(dt);
@@ -141,7 +141,9 @@ export class Battle {
       for(const friend of this.planes)if(friend!==p&&friend.team===p.team&&!friend.sim.crashed){if(segmentSphere(muzzle.clone().sub(friend.sim.position),end.clone().sub(friend.sim.position),6)!==null){gun.trigger=false;break;}}
     }
     if(s.crashed)gun.trigger=false;
+    const roundsBefore=gun.roundsFired;
     gun.step(dt,{muzzle,direction,aircraftVelocity:s.velocity,groundHeightAt:this.surface,sweep:(a,b)=>this.bulletHit(p,a,b,rear)});
+    const fired=gun.roundsFired-roundsBefore;if(fired>0)this.pushEffect({kind:'muzzle',position:muzzle.clone(),velocity:direction.clone(),intensity:Math.min(1,fired*.7),targetId:p.id});
     for(const impact of gun.consumeImpacts())this.pushEffect({kind:'hit',position:impact.position,velocity:impact.velocity,intensity:impact.tracer?.8:.5});
   }
   consumeEffects(){return this.effects.splice(0);}
