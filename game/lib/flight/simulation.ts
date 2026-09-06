@@ -13,6 +13,8 @@ export function optimalMixture(altitude: number) { return clamp(.85 * Math.exp(-
 export class FlightSimulation {
   readonly scenery = new SceneryCollisions();
   aircraftType: AircraftType = 'scout';
+  bombsRemaining = 0;
+  airframeHealth = 1;
   get spec() { return AIRCRAFT[this.aircraftType]; }
   spawn = new Vector3(0, SPEC.groundHeight, 330);
   groundHeightAt: (x:number,z:number)=>number = () => 0;
@@ -35,10 +37,11 @@ export class FlightSimulation {
   private previousPosition = new Vector3(); private previousOrientation = new Quaternion();
   private groundNormal = new Vector3(0,1,0);
   private propTip = new Vector3(); private skidTime = 0;
-  get mass() { return this.spec.dryMass + this.fuel * .72 + this.spec.bombs * 30; }
+  get mass() { return this.spec.dryMass + this.fuel * .72 + this.bombsRemaining * 30; }
   get indicatedAirspeed() { return this.airspeed * Math.sqrt(Math.exp(-Math.max(0, this.position.y) / 8500)); }
   reset() {
     this.position.copy(this.spawn); this.velocity.set(0, 0, 0); this.orientation.identity(); this.rates.set(0, 0, 0);
+    this.bombsRemaining=this.spec.bombs;this.airframeHealth=1;
     Object.assign(this.controls, { throttle: 0, mixture: .85, radiator: .5, pitch: 0, roll: 0, ignition: false, brake: true });
     this.fuel = this.spec.fuel; this.temperature = 15; this.health = 1; this.rpm = 0; this.time = 0; this.alpha = 0;
     this.airspeed = 0; this.lift = 0; this.drag = 0; this.thrust = 0; this.grounded = true; this.crashed = false;
@@ -47,11 +50,13 @@ export class FlightSimulation {
     this.groundSpeed = 0; this.lateralSpeed = 0; this.groundLoad = 0; this.propClearance = Infinity; this.skidTime = 0;
     this.scenery.setAircraftScale(this.spec.span/8.8, this.spec.length);
   }
-  private crash(cause:string, speed:number) {
+  crash(cause:string, speed=this.velocity.length()) {
+    if(this.crashed)return;
     this.impactVelocity.copy(this.velocity); this.impactSpeed=speed;
     this.crashed=true; this.crashCause=cause; this.engine='off'; this.controls.ignition=false;
-    this.velocity.set(0,0,0);this.rates.set(0,0,0);this.rpm=0;this.health=0;this.thrust=0;
+    this.velocity.set(0,0,0);this.rates.set(0,0,0);this.rpm=0;this.health=0;this.airframeHealth=0;this.thrust=0;
   }
+  damage(amount:number){if(this.crashed||amount<=0)return;this.airframeHealth=Math.max(0,this.airframeHealth-amount);this.health=Math.max(0,this.health-amount*.15);if(this.airframeHealth<=0)this.crash('SHOT DOWN');}
   step(dt = DT) {
     if (this.crashed) return;
     this.previousPosition.copy(this.position); this.previousOrientation.copy(this.orientation);

@@ -20,6 +20,8 @@ export type GunStep = {
   direction: T.Vector3;
   aircraftVelocity: T.Vector3;
   groundHeightAt: (x: number, z: number) => number;
+  // Earliest swept world hit, normalized along this tick's segment.
+  sweep?: (from:T.Vector3,to:T.Vector3)=>number|null;
 };
 
 /** A water-cooled, rifle-calibre aircraft gun with a manually cleared action. */
@@ -77,6 +79,8 @@ export class MachineGun {
       p.velocity.y -= 9.81 * dt;
       p.position.addScaledVector(p.velocity, dt);
       p.age += dt;
+      const contact=state.sweep?.(p.previous,p.position);
+      if(contact!==undefined&&contact!==null){p.position.lerpVectors(p.previous,p.position,contact);this.impacts.push({position:p.position.clone(),velocity:p.velocity.clone(),tracer:p.tracer});if(this.impacts.length>64)this.impacts.shift();this.projectiles.splice(i,1);continue;}
       const ground = state.groundHeightAt(p.position.x, p.position.z);
       if (p.position.y <= ground) {
         p.position.y = ground;

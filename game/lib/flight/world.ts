@@ -1,8 +1,12 @@
 import * as T from 'three';
 import { AIRFIELDS, CELL_SIZE, GRID_SIZE, Terrain, riverX } from './terrain';
 import { SceneryCollisions } from './collisions';
+import type { Building } from './battle';
 
 export class WorldView {
+  private targets=new Map<string,{intact:T.Group;rubble:T.Mesh}>();
+  updateBuildings(buildings:Building[]){for(const b of buildings){const view=this.targets.get(b.id);if(view){view.intact.visible=!b.destroyed;view.rubble.visible=b.destroyed;}}}
+  private target(id:string,intact:T.Group,size:number[]){const rubble=this.box(intact.parent!,[size[0],1.5,size[1]],[intact.position.x,.75,intact.position.z],this.material('#393b32'));rubble.visible=false;this.targets.set(id,{intact,rubble});}
   private materials: T.Material[]=[]; private textures:T.Texture[]=[];
   private grass = new T.MeshLambertMaterial({vertexColors:true,flatShading:true});
   constructor(private scene:T.Scene,readonly terrain:Terrain,private collisions:SceneryCollisions) {
@@ -50,11 +54,13 @@ export class WorldView {
         this.box(hangar,[32,11,35],[0,5.5,0],timber);const top=new T.Mesh(new T.CylinderGeometry(0,23,8,4),roof);top.rotation.y=Math.PI/4;top.scale.z=1.1;top.position.y=15;hangar.add(top);
         this.box(hangar,[.15,8.5,25],[16.1,4.25,0],door);
         this.collisions.addHangar(field.x-105,field.z+240-i*78,base);
+        this.target(`${index}-${i}`,hangar,[32,35]);
       }
       const tower=new T.Group();tower.position.set(-95,0,-140);group.add(tower);
       for(const x of[-4,4])for(const z of[-4,4])this.box(tower,[.6,17,.6],[x,8.5,z],timber);
       this.box(tower,[11,4,10],[0,17,0],roof);this.box(tower,[11.2,1.5,10.2],[0,17.8,0],this.material('#55716b'));this.box(tower,[13,.6,12],[0,20,0],timber);
       this.collisions.addBox('TOWER',new T.Vector3(field.x-101.5,base,field.z-146),new T.Vector3(field.x-88.5,base+20.3,field.z-134));
+      this.target(`${index}-3`,tower,[13,12]);
       this.box(group,[.3,13,.3],[49,6.5,220],timber);this.collisions.addBox('WINDSOCK POLE',new T.Vector3(field.x+48.85,base,field.z+219.85),new T.Vector3(field.x+49.15,base+13,field.z+220.15));
       const sock=new T.Mesh(new T.CylinderGeometry(.65,.25,4,6),this.material('#bd754a'));sock.rotation.z=Math.PI/2;sock.position.set(51,12.6,220);group.add(sock);
       const canvas=document.createElement('canvas');canvas.width=512;canvas.height=128;const ctx=canvas.getContext('2d')!;ctx.fillStyle=field.team==='ALLIED'?'#293f46':'#603f34';ctx.fillRect(0,0,512,128);ctx.fillStyle='#e6dab4';ctx.font='bold 40px monospace';ctx.textAlign='center';ctx.fillText(field.name,256,58);ctx.font='23px monospace';ctx.fillText(`${field.team}  ·  ${base} m`,256,97);

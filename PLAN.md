@@ -1,5 +1,11 @@
 # WW1 flight simulator — implementation plan
 
+## Current rules override — iteration 04
+
+The user replaced the six-versus-six runway-destruction battle with eight active aircraft total (four per team, player included) and a race to 100 points. Each enemy aircraft crash awards 10; each enemy hangar/tower destroyed by a bomb awards 10 once. The current implementation connects the existing projectile gun to aircraft damage, adds individually released wing bombs, AI pilots/rear gunners, eight-second reinforcement slots, persistent building destruction, score HUD and win/draw state. AI reinforcement flights start airborne. The older runway-victory and twelve-aircraft descriptions below are historical planning, superseded by these rules.
+
+Headless match scenarios now cover a complete race, gun and bomb scoring, roster caps, respawns and outcome freeze. Browser handling/performance validation, detailed damage, AI perception and runway circuits remain future work.
+
 Status: iteration 02 implemented in `game/`. The flight foundation now has the seeded 10 km terrain, four airfields, three flyable airframes, a navigation map and hangar selection. Circular wheel controls, radiator drag, an attitude indicator, crash debris and a tumbling pilot camera are implemented. Headless scenarios cover all twelve aircraft/airfield takeoff combinations and landing/redeparture. Phase 2 implementation is in place; browser circuits, visual inspection and hardware performance measurement remain. Combat, AI and match victory in Phases 3–5 remain future work. See `game/README.md` for measured checks and current limits.
 
 ## 1. Product and initial assumptions
@@ -231,3 +237,9 @@ During interactive validation, exercise click/drag/release outside a hit region,
 - [NASA inclination effects on lift](https://www.grc.nasa.gov/WWW/k-12/VirtualAero/BottleRocket/airplane/incline.html) — angle-of-attack dependence and stall behaviour.
 
 These support the foundations; numerical aircraft coefficients, balance, performance budgets, and engine curves above are proposed design choices requiring implementation and validation.
+
+
+## Current airfield revision
+
+Implemented hangar-first aircraft selection with aerial airfield preview, apron taxi starts, stopped-runway aircraft changes retaining match state, runway-based AI departure/replacement queues, green/red aircraft halos, bomber-only release controls and unrestricted faster head turning. Scoring is now 5 points per aircraft loss or enemy building destroyed. The active roster remains eight (four per team). Earlier runway-destruction and airborne-reinforcement proposals are superseded.
+

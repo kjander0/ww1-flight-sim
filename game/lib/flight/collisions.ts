@@ -48,6 +48,7 @@ function convexTime(start: Vector3, end: Vector3, planes: Plane[], radius: numbe
 
 /** Static scenery, bucketed by 64 m ground cells; only nearby obstacles are tested. */
 export class SceneryCollisions {
+  isEnabled: (kind:string,bounds:Box3)=>boolean=()=>true;
   private grid = new Map<string, Obstacle[]>();
   private nearby = new Set<Obstacle>();
   private start = new Vector3(); private end = new Vector3();
@@ -99,6 +100,7 @@ export class SceneryCollisions {
         const radius=part.radius*(part.center.x!==0?this.spanScale:part.center.z>1.5?this.lengthScale:1)+.001;
         this.start.set(part.center.x*this.spanScale,part.center.y,z).applyQuaternion(this.rotStart).add(this.poseStart); this.end.set(part.center.x*this.spanScale,part.center.y,z).applyQuaternion(this.rotEnd).add(this.poseEnd);
         for (const o of this.nearby) {
+          if(!this.isEnabled(o.kind,o.bounds))continue;
           const coarse = boxTime(this.start, this.end, o.bounds, radius); if (coarse === null) continue;
           const time = o.center ? sphereTime(this.start, this.end, o.center, o.radius! + radius) : o.planes ? convexTime(this.start, this.end, o.planes, radius) : coarse;
           if (time !== null) { const t = (step + time) / steps; if (!hit || t < hit.time) hit = { kind: o.kind, time: t }; }
