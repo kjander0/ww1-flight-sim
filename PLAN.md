@@ -243,7 +243,7 @@ These support the foundations; numerical aircraft coefficients, balance, perform
 
 ## Current airfield and sandbox revision
 
-Implemented hangar-first aircraft selection with aerial airfield preview, apron taxi starts, stopped-runway aircraft changes retaining world state, runway-based AI departure queues, complete AI landing/service/relaunch circuits, scanning perception and contact memory, green/red aircraft halos, bomber-only release controls and unrestricted faster head turning. The active roster is twelve (six per team). There is no scoring or terminal state; earlier runway-destruction, points-race, and airborne-reinforcement proposals are superseded.
+Implemented hangar-first aircraft selection with aerial airfield preview, apron taxi starts, stopped-runway aircraft changes retaining world state, runway-based AI departure queues, complete AI landing/service/relaunch circuits, scanning perception and contact memory, loose high-altitude scout/fighter escorts for friendly bombers, green/red aircraft halos, bomber-only release controls and unrestricted faster head turning. The active roster is twelve (six per team). There is no scoring or terminal state; earlier runway-destruction, points-race, and airborne-reinforcement proposals are superseded.
 
 Forward guns now fire at 600 RPM from 100-round belts with every third round a tracer. Fighters carry mirrored, independently operated forward guns. The lighter Scout has slightly stronger control response while retaining a lower speed limit than the Fighter. Damage-triggered AI evasive manoeuvres last 15–25 seconds and change held turn/dive direction every 1–4 seconds.
 

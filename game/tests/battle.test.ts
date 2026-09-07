@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as T from 'three';
 import { haloStrength, pointRearGunner } from '../lib/flight/battle-view';
-import { AI_SERVICE_SECONDS, AI_STUCK_DISTANCE, AI_STUCK_SECONDS, AMMO_RESTOCK_RATE, Battle, BLAST_KILL_RADIUS, FORWARD_GUN_DAMAGE, FUEL_RESTOCK_RATE, PLANES_PER_TEAM, REAR_GUN_AIM_ERROR, RESPAWN_DELAY, TARGET_MEMORY_SECONDS, aircraftHitVolumes, forwardGunDirection, gunHitDamage, pilotScanDirection, rackPosition, rearGunnerIdleDirection, rearGunnerShotDirection, segmentBox, segmentSphere, spottingChance, terrainHit, type Bomb, type Plane } from '../lib/flight/battle';
+import { AI_ESCORT_ALTITUDE, AI_ESCORT_CHANCE, AI_SERVICE_SECONDS, AI_STUCK_DISTANCE, AI_STUCK_SECONDS, AMMO_RESTOCK_RATE, Battle, BLAST_KILL_RADIUS, FORWARD_GUN_DAMAGE, FUEL_RESTOCK_RATE, PLANES_PER_TEAM, REAR_GUN_AIM_ERROR, RESPAWN_DELAY, TARGET_MEMORY_SECONDS, aircraftHitVolumes, escortPosition, forwardGunDirection, gunHitDamage, pilotScanDirection, rackPosition, rearGunnerIdleDirection, rearGunnerShotDirection, segmentBox, segmentSphere, spottingChance, terrainHit, type Bomb, type Plane } from '../lib/flight/battle';
 import { parkingPosition, stoppedRunway, turnHeadYaw } from '../lib/flight/airfield-ops';
 import { AIRFIELDS, Terrain } from '../lib/flight/terrain';
 import { FlightSimulation, DT } from '../lib/flight/simulation';
@@ -133,6 +133,13 @@ test('a damaged AI pilot can choose not to enter an evasive manoeuvre',()=>{
 });
 test('fighter AI has two independent forward guns',()=>{
   const b=match(),fighter=b.planes.find(p=>p.id!==0&&p.sim.aircraftType==='fighter')!;assert.equal(fighter.gun.capacity,100);assert.equal(fighter.secondary.capacity,100);fighter.gun.roundsRemaining=9;fighter.secondary.roundsRemaining=7;fighter.gun.reset();assert.equal(fighter.gun.roundsRemaining,100);assert.equal(fighter.secondary.roundsRemaining,7);
+});
+void test('scouts and fighters can escort above a friendly bomber until combat takes priority',()=>{
+  const b=match('ALLIED',()=>0),escort=b.planes.find(p=>p.team==='ALLIED'&&p.sim.aircraftType==='fighter')!,bomber=b.planes.find(p=>p.team==='ALLIED'&&p.sim.aircraftType==='bomber')!,enemy=b.planes.find(p=>p.team==='CENTRAL')!;
+  assert.ok(AI_ESCORT_CHANCE>0&&AI_ESCORT_CHANCE<1);bomber.sim.position.set(400,520,-300);bomber.sim.orientation.identity();bomber.sim.airspeed=39;bomber.sim.grounded=false;bomber.departure='flying';escort.sim.position.set(0,500,0);escort.sim.velocity.set(0,0,-42);escort.sim.airspeed=42;escort.sim.grounded=false;escort.departure='flying';escort.decision=10;
+  const station=escortPosition(bomber.sim.position,bomber.sim.orientation,escort.id);assert.ok(station.y>=bomber.sim.position.y+AI_ESCORT_ALTITUDE);assert.ok(Math.hypot(station.x-bomber.sim.position.x,station.z-bomber.sim.position.z)>250);
+  const fly=(b as unknown as {flyAI:(plane:Plane,dt:number)=>void}).flyAI.bind(b);fly(escort,DT);assert.equal(escort.escortTarget,bomber.id);assert.equal(escort.mode,'ESCORT BOMBER');
+  enemy.sim.position.set(150,540,-350);enemy.sim.velocity.set(0,0,-38);enemy.sim.grounded=false;escort.target=enemy.id;escort.lastSeenPosition.copy(enemy.sim.position);escort.lastSeenVelocity.copy(enemy.sim.velocity);escort.lastSeenAt=b.time;escort.targetMemoryUntil=b.time+TARGET_MEMORY_SECONDS;fly(escort,DT);assert.notEqual(escort.mode,'ESCORT BOMBER');assert.equal(escort.escortTarget,bomber.id);
 });
 test('rear gunner fires only into clear rear-upper arc and respects own tail and friendlies',()=>{
   const b=match(),bomber=b.planes[3],target=b.planes[PLANES_PER_TEAM];bomber.sim.position.set(0,1000,0);bomber.sim.orientation.identity();bomber.sim.velocity.set(0,0,-40);target.sim.position.set(0,1015,150);target.sim.velocity.set(0,0,-40);
