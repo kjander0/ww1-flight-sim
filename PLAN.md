@@ -1,14 +1,16 @@
 # WW1 flight simulator — implementation plan
 
-## Current rules override — iteration 04
+## Canonical product direction — continuous mission sandbox
 
-The user replaced the six-versus-six runway-destruction battle with ten active aircraft total (five per team, player included) and a race to 100 points. Each enemy aircraft crash awards 10; each enemy hangar/tower destroyed by a bomb awards 10 once. The current implementation connects the existing projectile gun to aircraft damage, adds individually released wing bombs, AI pilots/rear gunners, eight-second reinforcement slots, persistent building destruction, score HUD and win/draw state. AI reinforcement flights start airborne. The older runway-victory and twelve-aircraft descriptions below are historical planning, superseded by these rules.
+Super Flight is a continuous single-player mission sandbox. There are no rounds, scores, winners, or terminal match state. The world, air activity, damage, destroyed buildings, player mission progress, and replacement flights continue until the page is refreshed. The hangar is a base for changing aircraft, airfield, and side without resetting the world. A finite battle mode may be considered separately in the future, but it is not the core ruleset and must not replace or interrupt the continuous sandbox.
 
-Headless match scenarios now cover a complete race, gun and bomb scoring, roster caps, respawns and outcome freeze. Browser handling/performance validation, detailed damage, AI perception and runway circuits remain future work.
+Ten aircraft slots remain active across the two teams, including the player. AI pilots fly complete sorties: taxi, take off, patrol/fight/bomb, return before exhaustion or after damage, land, roll out, taxi to service, refuel, rearm, repair, and launch again. Pilots actively scan the sky, have direction- and altitude-weighted spotting, remember lost contacts, and immediately recognize an attacker when hit.
 
-Status: iteration 02 implemented in `game/`. The flight foundation now has the seeded 10 km terrain, four airfields, three flyable airframes, a navigation map and hangar selection. Circular wheel controls, radiator drag, an attitude indicator, crash debris and a tumbling pilot camera are implemented. Headless scenarios cover all twelve aircraft/airfield takeoff combinations and landing/redeparture. Phase 2 implementation is in place; browser circuits, visual inspection and hardware performance measurement remain. Combat, AI and match victory in Phases 3–5 remain future work. See `game/README.md` for measured checks and current limits.
+Gunfire damages four spatial components: left wing, right wing, tail, and engine. Component damage changes lift, drag, control authority, asymmetry, and power. Failed components can visibly detach and fall independently before a later crash. The older runway-destruction and points-race descriptions in the historical roadmap below are superseded.
 
-## 1. Product and initial assumptions
+The remaining validation priorities are browser/hardware performance measurement, player-led visual tuning, and continued balance testing. See `game/README.md` for the current implementation and measured automated checks.
+
+## 1. Historical product and initial assumptions
 
 Build a browser-based, first-person WW1 flight combat game with intentionally low-poly models, low-resolution textures, and a usable interactive cockpit. The playable map is 10,000 × 10,000 metres, containing terrain, settlements, vegetation, and four airstrips. Each team owns two airstrips and can have at most six active aircraft, including the player. Destroy both opposing runways to win.
 
@@ -239,9 +241,11 @@ During interactive validation, exercise click/drag/release outside a hit region,
 These support the foundations; numerical aircraft coefficients, balance, performance budgets, and engine curves above are proposed design choices requiring implementation and validation.
 
 
-## Current airfield revision
+## Current airfield and sandbox revision
 
-Implemented hangar-first aircraft selection with aerial airfield preview, apron taxi starts, stopped-runway aircraft changes retaining match state, runway-based AI departure/replacement queues, green/red aircraft halos, bomber-only release controls and unrestricted faster head turning. Scoring is now 5 points per aircraft loss or enemy building destroyed. The active roster is ten (five per team). Earlier runway-destruction and airborne-reinforcement proposals are superseded.
+Implemented hangar-first aircraft selection with aerial airfield preview, apron taxi starts, stopped-runway aircraft changes retaining world state, runway-based AI departure queues, complete AI landing/service/relaunch circuits, scanning perception and contact memory, green/red aircraft halos, bomber-only release controls and unrestricted faster head turning. The active roster is twelve (six per team). There is no scoring or terminal state; earlier runway-destruction, points-race, and airborne-reinforcement proposals are superseded.
 
 Forward guns now fire at 600 RPM from 100-round belts with every third round a tracer. Fighters carry mirrored, independently operated forward guns. The lighter Scout has slightly stronger control response while retaining a lower speed limit than the Fighter. Damage-triggered AI evasive manoeuvres last 15–25 seconds and change held turn/dive direction every 1–4 seconds.
+
+Bullet collision now resolves left wing, right wing, tail, and engine hit volumes. Progressive component damage reduces aerodynamic or engine performance; destroyed external components detach into independently falling wreckage instead of forcing an immediate whole-aircraft breakup.
 

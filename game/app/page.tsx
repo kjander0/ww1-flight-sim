@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import {
   Dialog,
   DialogContent,
+  DialogFooter,
   DialogTitle,
   DialogDescription,
 } from '@/components/ui/dialog';
@@ -37,6 +38,7 @@ export default function Home() {
   const [help, setHelp] = useState(false),
     [paused, setPaused] = useState(false);
   const [hangar, setHangar] = useState(true);
+  const [fullscreenPrompt, setFullscreenPrompt] = useState(true);
   const [leftAircraft, setLeftAircraft] = useState(false);
   const [info, setInfo] = useState<FlightInfo | null>(null);
   const [type, setType] = useState<AircraftType>('scout'),
@@ -140,6 +142,13 @@ export default function Home() {
     const timeout=window.setTimeout(()=>setNotifications(current=>current.filter(notification=>notification.expiresAt>Date.now())),delay+20);
     return()=>window.clearTimeout(timeout);
   },[notifications]);
+  const enterFullscreen = () => {
+    const root = document.documentElement;
+    if (typeof root.requestFullscreen === 'function') {
+      void root.requestFullscreen().catch(() => undefined);
+    }
+    setFullscreenPrompt(false);
+  };
   return (
     <TooltipProvider>
     <main className={`flight-app ${hangar ? 'hangar-open' : ''}`}>
@@ -218,7 +227,26 @@ export default function Home() {
         </output>
       )}
       <Dialog
-        open={hangar}
+        open={ready && fullscreenPrompt}
+        onOpenChange={(open) => {
+          if (!open) setFullscreenPrompt(false);
+        }}
+      >
+        <DialogContent className="fullscreen-prompt" showCloseButton={false}>
+          <DialogTitle>Fly in fullscreen?</DialogTitle>
+          <DialogDescription>
+            Fullscreen gives the cockpit more room and keeps the flight view clear.
+          </DialogDescription>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setFullscreenPrompt(false)}>
+              NOT NOW
+            </Button>
+            <Button onClick={enterFullscreen}>GO FULLSCREEN</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog
+        open={hangar && (!ready || !fullscreenPrompt)}
         onOpenChange={(v) => {
           if (v || (info?.started && !info.crashed && !leftAircraft))
             setHangar(v);
@@ -387,13 +415,18 @@ export default function Home() {
               level the wings, and regain speed. Reduce throttle, flare gently,
               and brake after touchdown. Runways and clear fields are usable;
               hard impacts, ground loops, prop strikes, terrain, trees, buildings,
-              water, and leaving the map can destroy the aircraft.
+              water, and leaving the map can destroy the aircraft. Gunfire damages
+              the left wing, right wing, tail, or engine according to where it
+              lands. A failed component can tear away and degrade the aircraft
+              before the remaining airframe finally crashes.
             </dd>
             <dt>Combat, AI & navigation</dt>
             <dd>
               MAP shows you, contacts, and all four airfields. Four allied and
-              five enemy AI pilots taxi, take off, dogfight, bomb, and return as
-              replacements after losses. There is no score or finishing state:
+              five enemy AI pilots taxi, take off, dogfight, bomb, land, taxi for
+              service, refuel, rearm, repair, and launch again. Pilots scan around
+              for contacts, remember aircraft they lose sight of, and react at once
+              when hit. There is no score or finishing state:
               air activity and damage continue until the page is refreshed. Enter
               the hangar to change aircraft, airfield, or side. Leaving a live
               aircraft away from a stationary runway forfeits it.

@@ -31,6 +31,9 @@ test('combat camera impulses are local, bounded, and scale with severity',()=>{
   assert.ok(crashShakeKick(60)>crashShakeKick(12));assert.ok(crashShakeKick(500)<=1.65);
 });
 function airborne() { const s = new FlightSimulation(); s.windEnabled = false; s.position.set(0, 500, 0); s.velocity.set(0, 0, -40); s.grounded = false; return s; }
+test('lost wing area reduces lift and produces an asymmetric rolling moment',()=>{
+  const intact=airborne(),damaged=airborne();damaged.damageComponent('leftWing',1);intact.step();damaged.step();assert.ok(damaged.lift<intact.lift*.7);assert.ok(Math.abs(damaged.rates.z)>Math.abs(intact.rates.z)+.001);assert.equal(damaged.crashed,false);
+});
 test('brake holds an unpowered aircraft but full engine power can overcome it', () => {
   const s = new FlightSimulation(); run(s, 60); assert.equal(s.position.y, SPEC.groundHeight); assert.ok(s.position.distanceTo(new Vector3(0, SPEC.groundHeight, 330)) < .1);
   s.controls.ignition = true; s.controls.throttle = 1; run(s, 10); assert.ok(s.rpm > 1500); assert.ok(s.groundSpeed > .5); assert.equal(s.crashed, false);

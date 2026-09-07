@@ -1,5 +1,5 @@
 import * as T from 'three';
-import { FlightSimulation, DT, clamp } from './simulation';
+import { FlightSimulation, DT, clamp, type DamageComponent } from './simulation';
 import { createFuselage, projectThrottleGrip, THROTTLE_BASE_Y, throttleAngle, throttleAtPointer, WheelWinder } from './cockpit';
 import { AIRCRAFT, AircraftType } from './aircraft';
 import { AIRFIELDS, Terrain } from './terrain';
@@ -73,6 +73,7 @@ export class FlightGame {
   private prevPosition = new T.Vector3(); private prevRotation = new T.Quaternion(); private look = new T.Quaternion();
   private shakeOffset=new T.Vector3();private shakeRotation=new T.Quaternion();private shakeEuler=new T.Euler(0,0,0,'YXZ');private impactShake=0;private wasCrashed=false;
   private propeller = new T.Group(); private resizeObserver: ResizeObserver;
+  private componentMeshes:Record<DamageComponent,T.Object3D[]>={leftWing:[],rightWing:[],tail:[],engine:[]};
   private labels: T.Texture[] = []; private fps = 60;
   readonly gun = new MachineGun();
   readonly secondaryGun = new MachineGun();
@@ -141,17 +142,16 @@ export class FlightGame {
     const panelMaterial = new T.MeshLambertMaterial({ map: wood });
     const fuselage=createFuselage(olive);fuselage.children[2].scale.y=spec.length;fuselage.children[2].position.z+=1.35*(spec.length-1);this.aircraft.add(fuselage);
     this.box(this.aircraft, [1.8, .06, 2.5], [0, -.7, .5], dark);
-    this.box(this.aircraft, [8.5*span, .095, 1.6], [0, -.3, -1.4], canvas);
-    this.box(this.aircraft, [spec.span, .10, 1.55], [0, 1.48, -1.4], canvas);
-    this.box(this.aircraft, [2.5*span, .07, .85], [0, -.32, 4.1*spec.length], canvas);
-    this.box(this.aircraft, [.07, 1.0, .85], [0, .1, 4.1*spec.length], olive);
+    for(const [component,sign] of [['leftWing',-1],['rightWing',1]] as const){this.componentMeshes[component].push(this.box(this.aircraft,[4.25*span,.095,1.6],[sign*2.125*span,-.3,-1.4],canvas));this.componentMeshes[component].push(this.box(this.aircraft,[spec.span/2,.10,1.55],[sign*spec.span/4,1.48,-1.4],canvas));}
+    this.componentMeshes.tail.push(this.box(this.aircraft,[2.5*span,.07,.85],[0,-.32,4.1*spec.length],canvas));
+    this.componentMeshes.tail.push(this.box(this.aircraft,[.07,1.0,.85],[0,.1,4.1*spec.length],olive));
     for(const x of[-spec.span*.33,spec.span*.33]){
-      if(AIRFIELDS[this.airfieldIndex].team==='ALLIED')for(const [radius,color]of[[.49,'#294963'],[.33,'#e3dec1'],[.16,'#a44f39']] as const){const mark=new T.Mesh(new T.CircleGeometry(radius,20),this.material(color));mark.rotation.x=-Math.PI/2;mark.position.set(x,1.54+( .5-radius)*.008,-1.4);this.aircraft.add(mark);}
-      else {this.box(this.aircraft,[.95,.012,.3],[x,1.54,-1.4],dark);this.box(this.aircraft,[.3,.014,1.1],[x,1.54,-1.4],dark);}
+      const component=x<0?'leftWing':'rightWing';if(AIRFIELDS[this.airfieldIndex].team==='ALLIED')for(const [radius,color]of[[.49,'#294963'],[.33,'#e3dec1'],[.16,'#a44f39']] as const){const mark=new T.Mesh(new T.CircleGeometry(radius,20),this.material(color));mark.rotation.x=-Math.PI/2;mark.position.set(x,1.54+( .5-radius)*.008,-1.4);this.aircraft.add(mark);this.componentMeshes[component].push(mark);}
+      else {this.componentMeshes[component].push(this.box(this.aircraft,[.95,.012,.3],[x,1.54,-1.4],dark),this.box(this.aircraft,[.3,.014,1.1],[x,1.54,-1.4],dark));}
     }
     if(this.sim.aircraftType==='bomber'){
       for(const x of[-spec.span*.18,spec.span*.18]){
-        this.box(this.aircraft,[.72,.58,1.72],[x,.38,-1.72],olive);
+        this.componentMeshes.engine.push(this.box(this.aircraft,[.72,.58,1.72],[x,.38,-1.72],olive));
       }
       const ring=new T.Mesh(new T.TorusGeometry(.42,.045,6,18),dark);ring.rotation.x=Math.PI/2;ring.position.set(0,.11,2.35);this.aircraft.add(ring);
       this.rearGunner.position.set(0,.27,2.35);this.aircraft.add(this.rearGunner);
@@ -210,6 +210,7 @@ export class FlightGame {
     if(this.sim.aircraftType==='bomber')for(const x of[-spec.span*.18,spec.span*.18]){const spinner=new T.Group();spinner.position.set(x,.38,-2.65);this.propeller.add(spinner);this.box(spinner,[.12,1.8,.07],[0,0,0],timber);}
     else {const spinner=new T.Group();spinner.position.set(0,0,-3.52);this.propeller.add(spinner);this.box(spinner,[.13,1.8,.08],[0,0,0],timber);}
     this.aircraft.add(this.propeller);
+    this.componentMeshes.engine.push(this.propeller);
     this.buildGun(dark, brass, timber);
     if(this.sim.aircraftType==='fighter')this.buildGun(dark,brass,timber,true);
     if(spec.bombs>0){this.label('BOMB RELEASE',-.48,-.46,-.32,.30);
@@ -370,13 +371,14 @@ export class FlightGame {
     if(this.battle.planes.slice(1).some(p=>!p.sim.crashed&&p.sim.position.distanceTo(parking)<24)){this.battle.message='PARKING OCCUPIED · CHOOSE OTHER AIRFIELD';return false;}
     this.crashEffects.reset();this.releaseAircraft();this.sim.aircraftType=type;this.airfieldIndex=airfieldIndex;this.setSpawn();this.sim.reset();this.gun.reset();this.secondaryGun.reset();this.resetView();this.buildAircraft();
     this.battle.setPlayerTeam(AIRFIELDS[airfieldIndex].team);
+    this.battle.beginPlayerFlight();
     const p=this.battle.planes[0];p.homeField=airfieldIndex;p.rear.reset();this.heardRearShots.set(p.id,0);p.cooldown=0;p.respawnQueued=false;p.generation++;p.previous.copy(this.sim.position);p.rotation.copy(this.sim.orientation);
     this.flightId=`${this.worldId}:${++this.sortieNumber}`;
     this.started=true;this.previewField=null;this.world.updateBuildings(this.battle.buildings);return true;
   }
   private releaseAircraft(){
     const geometries=new Set<T.BufferGeometry>(),materials=new Set<T.Material>();this.aircraft.traverse(o=>{if(o instanceof T.Mesh){geometries.add(o.geometry);for(const m of Array.isArray(o.material)?o.material:[o.material])materials.add(m);}});
-    geometries.forEach(g=>g.dispose());materials.forEach(m=>m.dispose());this.labels.forEach(t=>t.dispose());this.labels=[];this.aircraft.clear();this.gauges=[];this.hits=[];this.knobs={};this.bombRacks.length=0;this.propeller=new T.Group();this.gunTrigger=new T.Group();this.cockingHandle=new T.Group();this.gunBarrelMaterial=null;this.leftGunTrigger=new T.Group();this.leftCockingHandle=new T.Group();this.leftGunBarrelMaterial=null;this.bombCover=new T.Group();this.rearMount=new T.Group();this.rearGunner=new T.Group();this.attitude=null;this.ammoTexture=null;this.shownAmmo=-1;this.leftAmmoTexture=null;this.leftShownAmmo=-1;
+    geometries.forEach(g=>g.dispose());materials.forEach(m=>m.dispose());this.labels.forEach(t=>t.dispose());this.labels=[];this.aircraft.clear();this.gauges=[];this.hits=[];this.knobs={};this.bombRacks.length=0;this.propeller=new T.Group();this.componentMeshes={leftWing:[],rightWing:[],tail:[],engine:[]};this.gunTrigger=new T.Group();this.cockingHandle=new T.Group();this.gunBarrelMaterial=null;this.leftGunTrigger=new T.Group();this.leftCockingHandle=new T.Group();this.leftGunBarrelMaterial=null;this.bombCover=new T.Group();this.rearMount=new T.Group();this.rearGunner=new T.Group();this.attitude=null;this.ammoTexture=null;this.shownAmmo=-1;this.leftAmmoTexture=null;this.leftShownAmmo=-1;
   }
   private startAudio() {
     if (!this.audio) {
@@ -535,6 +537,7 @@ export class FlightGame {
     this.leftGunTrigger.rotation.x=(this.secondaryGun.trigger?-.34:0)+this.leftGunRecoil*.08;
     for(const button of[0,2] as MouseButton[]){const hand=this.hands[button];if(hand.visible){const active=this.drags.has(button);hand.position.z=active?.01:.035;hand.rotation.x=active?.12:0;}}
     this.updateTracers();
+    for(const [component,objects] of Object.entries(this.componentMeshes) as [DamageComponent,T.Object3D[]][])for(const object of objects)object.visible=!this.sim.detachedComponents.has(component);
     if (active) for(const spinner of this.propeller.children)spinner.rotation.z += this.sim.rpm * Math.PI / 30 * elapsed;
     this.cockpit.updateMatrixWorld(true);
     this.renderer.setRenderTarget(this.target); this.renderer.clear(); this.renderer.render(this.scene, this.camera);
@@ -552,7 +555,7 @@ export class FlightGame {
       const attitude=readAttitude(s.orientation);
       const altitudeAboveGround=Math.max(0,s.position.y-this.terrain.heightAt(s.position.x,s.position.z)-1.15);
       const gunTelemetry=(gun:MachineGun)=>`${gun.jammed?'JAMMED':gun.cocked?'READY':'SAFE'}  HEAT ${(gun.heat*100).toFixed(0)}%  AMMO ${gun.roundsRemaining}/${gun.capacity}`;
-      this.report(status, hint, `${this.fps.toFixed(0)} FPS · 60 Hz physics\nALT ${s.position.y.toFixed(1)} m  IAS ${(s.indicatedAirspeed * 3.6).toFixed(1)} km/h  LIMIT ${s.spec.overspeed} km/h\nAoA ${(s.alpha * 180 / Math.PI).toFixed(1)}°  LOAD ${s.loadFactor.toFixed(2)} g  V/S ${s.velocity.y.toFixed(1)} m/s\nLIFT ${s.lift.toFixed(0)} N  DRAG ${s.drag.toFixed(0)} N\nQ ${s.dynamicPressure.toFixed(0)} Pa  ELEV ${(s.effectiveElevator*100).toFixed(0)}%  RADIATOR DRAG ${s.radiatorDrag.toFixed(0)} N\nGROUND LOAD ${(s.groundLoad/9.81).toFixed(2)} g  PROP CLEAR ${Number.isFinite(s.propClearance)?s.propClearance.toFixed(2):'—'} m\nROLL ${(attitude.roll*180/Math.PI).toFixed(0)}° PITCH ${(attitude.pitch*180/Math.PI).toFixed(0)}°\nRPM ${s.rpm.toFixed(0)}  TEMP ${s.temperature.toFixed(1)}°C\n${fighter?'RIGHT ':''}GUN ${gunTelemetry(this.gun)}${fighter?`\nLEFT GUN ${gunTelemetry(this.secondaryGun)}`:''}\nFUEL ${s.fuel.toFixed(1)} L  LEAKS ${s.fuelLeaks}  ENGINE ${(s.health * 100).toFixed(0)}%\nPOS ${s.position.x.toFixed(0)}, ${s.position.z.toFixed(0)}`,{started:this.started,flightId:this.flightId,canHangar:this.canHangar(),aircraftType:s.aircraftType,airfieldIndex:this.airfieldIndex,x:s.position.x,z:s.position.z,heading:-new T.Euler().setFromQuaternion(s.orientation,'YXZ').y*180/Math.PI,altitude:s.position.y,altitudeAboveGround,rollRadians:attitude.roll,rollControl:s.controls.roll,loopRotation:this.loopRotation,betweenTrees:!s.grounded&&!s.crashed&&s.scenery.isBetweenTrees(s.position,s.orientation,s.spec.span/2),grounded:s.grounded,crashed:s.crashed,battle:this.battle.info()});
+      this.report(status, hint, `${this.fps.toFixed(0)} FPS · 60 Hz physics\nALT ${s.position.y.toFixed(1)} m  IAS ${(s.indicatedAirspeed * 3.6).toFixed(1)} km/h  LIMIT ${s.spec.overspeed} km/h\nAoA ${(s.alpha * 180 / Math.PI).toFixed(1)}°  LOAD ${s.loadFactor.toFixed(2)} g  V/S ${s.velocity.y.toFixed(1)} m/s\nLIFT ${s.lift.toFixed(0)} N  DRAG ${s.drag.toFixed(0)} N\nQ ${s.dynamicPressure.toFixed(0)} Pa  ELEV ${(s.effectiveElevator*100).toFixed(0)}%  RADIATOR DRAG ${s.radiatorDrag.toFixed(0)} N\nGROUND LOAD ${(s.groundLoad/9.81).toFixed(2)} g  PROP CLEAR ${Number.isFinite(s.propClearance)?s.propClearance.toFixed(2):'—'} m\nROLL ${(attitude.roll*180/Math.PI).toFixed(0)}° PITCH ${(attitude.pitch*180/Math.PI).toFixed(0)}°\nRPM ${s.rpm.toFixed(0)}  TEMP ${s.temperature.toFixed(1)}°C\n${fighter?'RIGHT ':''}GUN ${gunTelemetry(this.gun)}${fighter?`\nLEFT GUN ${gunTelemetry(this.secondaryGun)}`:''}\nFUEL ${s.fuel.toFixed(1)} L  LEAKS ${s.fuelLeaks}  ENGINE ${(s.health * 100).toFixed(0)}%\nCOMPONENTS L ${(s.componentHealth.leftWing*100).toFixed(0)}%  R ${(s.componentHealth.rightWing*100).toFixed(0)}%  TAIL ${(s.componentHealth.tail*100).toFixed(0)}%  MOTOR ${(s.componentHealth.engine*100).toFixed(0)}%\nPOS ${s.position.x.toFixed(0)}, ${s.position.z.toFixed(0)}`,{started:this.started,flightId:this.flightId,canHangar:this.canHangar(),aircraftType:s.aircraftType,airfieldIndex:this.airfieldIndex,x:s.position.x,z:s.position.z,heading:-new T.Euler().setFromQuaternion(s.orientation,'YXZ').y*180/Math.PI,altitude:s.position.y,altitudeAboveGround,rollRadians:attitude.roll,rollControl:s.controls.roll,loopRotation:this.loopRotation,betweenTrees:!s.grounded&&!s.crashed&&s.scenery.isBetweenTrees(s.position,s.orientation,s.spec.span/2),grounded:s.grounded,crashed:s.crashed,battle:this.battle.info()});
     }
   };
   dispose() {

@@ -10,6 +10,9 @@ export const MIXTURE_MANAGEMENT_ALTITUDE = 2000;
 export const RADIATOR_DRAG_COEFFICIENT = .014;
 export const PITCH_TRIM_ALPHA = .015;
 export const ELEVATOR_ALPHA_RANGE = .30;
+export type DamageComponent='leftWing'|'rightWing'|'tail'|'engine';
+export type ComponentHealth=Record<DamageComponent,number>;
+export const freshComponentHealth=():ComponentHealth=>({leftWing:1,rightWing:1,tail:1,engine:1});
 export const elevatorForceAuthority = (dynamicPressure: number) => clamp(950 / Math.max(dynamicPressure, 1), .35, 1);
 export const pitchInputForAlpha = (alpha: number, dynamicPressure: number) =>
   clamp((alpha - PITCH_TRIM_ALPHA) / (ELEVATOR_ALPHA_RANGE * elevatorForceAuthority(dynamicPressure)), -1, 1);
@@ -36,6 +39,8 @@ export class FlightSimulation {
   aircraftType: AircraftType = 'scout';
   bombsRemaining = 0;
   airframeHealth = 1;
+  componentHealth:ComponentHealth=freshComponentHealth();
+  detachedComponents=new Set<DamageComponent>();
   get spec() { return AIRCRAFT[this.aircraftType]; }
   spawn = new Vector3(0, SPEC.groundHeight, 330);
   groundHeightAt: (x:number,z:number)=>number = () => 0;
@@ -64,7 +69,7 @@ export class FlightSimulation {
   get criticalSpeedKmh() { return this.spec.overspeed * 2; }
   reset() {
     this.position.copy(this.spawn); this.velocity.set(0, 0, 0); this.orientation.identity(); this.rates.set(0, 0, 0);
-    this.bombsRemaining=this.spec.bombs;this.airframeHealth=1;
+    this.bombsRemaining=this.spec.bombs;this.airframeHealth=1;this.componentHealth=freshComponentHealth();this.detachedComponents.clear();
     Object.assign(this.controls, { throttle: 0, mixture: .85, radiator: .5, pitch: 0, roll: 0, ignition: false, brake: true });
     this.fuel = this.spec.fuel; this.fuelLeaks=0; this.temperature = 15; this.health = 1; this.rpm = 0; this.time = 0; this.alpha = 0;
     this.airspeed = 0; this.lift = 0; this.drag = 0; this.thrust = 0; this.grounded = true; this.crashed = false;
@@ -81,6 +86,20 @@ export class FlightSimulation {
     this.velocity.set(0,0,0);this.rates.set(0,0,0);this.rpm=0;this.health=0;this.airframeHealth=0;this.thrust=0;
   }
   damage(amount:number){if(this.crashed||amount<=0)return;this.airframeHealth=Math.max(0,this.airframeHealth-amount);this.health=Math.max(0,this.health-amount*.15);if(this.airframeHealth<=0)this.crash('SHOT DOWN');}
+  damageComponent(component:DamageComponent,amount:number){
+    if(this.crashed||amount<=0)return false;
+    const before=this.componentHealth[component];
+    this.componentHealth[component]=Math.max(0,before-amount*1.55);
+    this.airframeHealth=Math.max(0,this.airframeHealth-amount*.55);
+    if(component==='engine')this.health=Math.min(this.health,Math.max(.05,this.componentHealth.engine));
+    const detached=before>0&&this.componentHealth[component]<=0;
+    if(detached)this.detachedComponents.add(component);
+    if(this.airframeHealth<=0)this.crash('SHOT DOWN');
+    return detached;
+  }
+  service(){
+    this.fuel=this.spec.fuel;this.bombsRemaining=this.spec.bombs;this.fuelLeaks=0;this.health=1;this.airframeHealth=1;this.componentHealth=freshComponentHealth();this.detachedComponents.clear();this.temperature=Math.min(this.temperature,70);this.engine='off';this.rpm=0;
+  }
   step(dt = DT) {
     if (this.crashed) return;
     this.previousPosition.copy(this.position); this.previousOrientation.copy(this.orientation);
@@ -100,13 +119,14 @@ export class FlightSimulation {
     const density = 1.225 * Math.exp(-Math.max(this.position.y, 0) / 8500);
     const mixtureError = (c.mixture - optimalMixture(this.position.y)) / .30;
     this.mixtureEfficiency = Math.exp(-mixtureError * mixtureError * 2);
-    if (this.health <= 0) this.engine = 'seized';
+    if (this.health <= 0||this.componentHealth.engine<=0) this.engine = 'seized';
     else if (!c.ignition || this.fuel <= 0) { this.engine = 'off'; this.cranking = 0; }
     else if (this.engine === 'off' && this.mixtureEfficiency > .2) { this.engine = 'starting'; this.cranking = 0; }
     if (this.engine === 'starting') { this.cranking += dt; if (this.cranking > 1.4) this.engine = 'running'; }
     const omega = this.rpm * Math.PI / 30;
     const running = this.engine === 'running';
-    const engineTorque = running ? (65*this.spec.torque/470 + this.spec.torque * c.throttle) * this.mixtureEfficiency * this.health * (density / 1.225) : this.engine === 'starting' ? 55 : 0;
+    const engineIntegrity=.12+.88*this.componentHealth.engine;
+    const engineTorque = running ? (65*this.spec.torque/470 + this.spec.torque * c.throttle) * this.mixtureEfficiency * this.health * engineIntegrity * (density / 1.225) : this.engine === 'starting' ? 55 : 0;
     const propTorque = .0145 * this.spec.torque/470 * omega * omega / (1 + this.airspeed / 150);
     this.rpm = clamp(this.rpm + (engineTorque - propTorque - omega * .055) / 6 * dt * 30 / Math.PI, 0, 2450);
     if (running && this.mixtureEfficiency < .08) this.engine = 'off';
@@ -124,10 +144,14 @@ export class FlightSimulation {
       this.health = Math.max(0, this.health - (.55 - this.mixtureEfficiency) * .006 * dt);
     const aero = coefficients(this.alpha); const q = .5 * density * this.airspeed * this.airspeed;
     this.dynamicPressure = q;
-    this.lift = q * this.spec.wingArea * aero.cl;
+    const leftWing=this.componentHealth.leftWing,rightWing=this.componentHealth.rightWing;
+    const wingAreaFactor=.08+.46*leftWing+.46*rightWing;
+    const tailAuthority=.16+.84*this.componentHealth.tail;
+    this.lift = q * this.spec.wingArea * wingAreaFactor * aero.cl;
     this.loadFactor = this.lift / Math.max(1, this.mass * 9.81);
     this.radiatorDrag = q * this.spec.wingArea * c.radiator * RADIATOR_DRAG_COEFFICIENT;
-    this.drag = q * this.spec.wingArea * (aero.cd + this.spec.drag-.043) + this.radiatorDrag;
+    const damageDrag=(2-leftWing-rightWing)*.035+(1-this.componentHealth.tail)*.018;
+    this.drag = q * this.spec.wingArea * (aero.cd + this.spec.drag-.043+damageDrag) + this.radiatorDrag;
     this.liftDirection.crossVectors(this.right, this.air).normalize();
     this.acceleration.copy(this.forward).multiplyScalar(this.thrust / this.mass);
     this.acceleration.addScaledVector(this.liftDirection, this.lift / this.mass);
@@ -141,10 +165,12 @@ export class FlightSimulation {
     const pilotForceAuthority = elevatorForceAuthority(q);
     this.effectiveElevator = c.pitch * pilotForceAuthority;
     const targetAlpha = PITCH_TRIM_ALPHA + this.effectiveElevator * ELEVATOR_ALPHA_RANGE;
-    const pitchAcceleration = (targetAlpha - this.alpha) * 5.2 * authority * this.spec.agility
+    const pitchAcceleration = (targetAlpha - this.alpha) * 5.2 * authority * this.spec.agility * tailAuthority
       - this.rates.x * (.9 + authority * .42);
     this.rates.x += pitchAcceleration * dt;
-    this.rates.z += (-c.roll * 1.6 * authority * this.spec.agility - this.rates.z * 3.3) * dt;
+    const rollAuthority=.12+.88*Math.min(leftWing,rightWing);
+    const asymmetricRoll=(rightWing-leftWing)*authority*.62;
+    this.rates.z += (-c.roll * 1.6 * authority * this.spec.agility * rollAuthority + asymmetricRoll - this.rates.z * (1.5+1.8*tailAuthority)) * dt;
     const coordinatedYaw = clamp(this.right.y * 9.81 / Math.max(this.airspeed, 16), -.65, .65);
     this.rates.y += (coordinatedYaw - this.rates.y) * Math.min(1, dt * 3);
     if (this.grounded) {

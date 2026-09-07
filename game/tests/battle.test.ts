@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as T from 'three';
 import { haloStrength, pointRearGunner } from '../lib/flight/battle-view';
-import { AMMO_RESTOCK_RATE, Battle, BLAST_KILL_RADIUS, FORWARD_GUN_DAMAGE, FUEL_RESTOCK_RATE, PLANES_PER_TEAM, REAR_GUN_AIM_ERROR, forwardGunDirection, gunHitDamage, rackPosition, rearGunnerIdleDirection, rearGunnerShotDirection, segmentBox, segmentSphere, terrainHit, type Bomb, type Plane } from '../lib/flight/battle';
+import { AI_SERVICE_SECONDS, AI_STUCK_DISTANCE, AI_STUCK_SECONDS, AMMO_RESTOCK_RATE, Battle, BLAST_KILL_RADIUS, FORWARD_GUN_DAMAGE, FUEL_RESTOCK_RATE, PLANES_PER_TEAM, REAR_GUN_AIM_ERROR, RESPAWN_DELAY, TARGET_MEMORY_SECONDS, aircraftHitVolumes, forwardGunDirection, gunHitDamage, pilotScanDirection, rackPosition, rearGunnerIdleDirection, rearGunnerShotDirection, segmentBox, segmentSphere, spottingChance, terrainHit, type Bomb, type Plane } from '../lib/flight/battle';
 import { parkingPosition, stoppedRunway, turnHeadYaw } from '../lib/flight/airfield-ops';
 import { AIRFIELDS, Terrain } from '../lib/flight/terrain';
 import { FlightSimulation, DT } from '../lib/flight/simulation';
@@ -37,13 +37,13 @@ test('AI taxis and takes off using physics; head turns wrap and hangar requires 
   assert.equal(stoppedRunway(b.planes[0].sim),-1);
   for(let i=0;i<360/DT;i++){b.step();for(const p of b.planes.slice(1))if(p.departure==='flying')departed.add(p.id);}
   t.diagnostic(JSON.stringify(b.planes.slice(1).map(p=>({id:p.id,stage:p.departure,cause:p.sim.crashCause,pos:p.sim.position.toArray().map(Math.round)}))));
-  assert.equal(departed.size,9);
+  assert.equal(departed.size,11);
   const s=b.planes[0].sim;s.position.x=-2800;assert.equal(stoppedRunway(s),0);s.velocity.z=1;assert.equal(stoppedRunway(s),-1);
   assert.ok(Math.abs(turnHeadYaw(0,1,4)-.31681469)<.00001);
 });
-test('ten slots include player, sides can change, and respawns never create extra planes',()=>{
-  for(const team of['ALLIED','CENTRAL'] as const){const b=match(team);assert.equal(b.planes.length,10);assert.deepEqual(b.info().counts,{ALLIED:5,CENTRAL:5});assert.equal(b.planes[0].team,team);
-    b.planes[4].sim.crash('TEST');b.step();assert.equal(b.info().counts[b.planes[4].team],4);const generation=b.planes[4].generation;ticks(b,7);assert.equal(b.planes[4].generation,generation);ticks(b,1.2);assert.equal(b.planes[4].generation,generation+1);assert.deepEqual(b.info().counts,{ALLIED:5,CENTRAL:5});
+test('twelve slots include player, sides can change, and respawns never create extra planes',()=>{
+  for(const team of['ALLIED','CENTRAL'] as const){const b=match(team);assert.equal(b.planes.length,12);assert.deepEqual(b.info().counts,{ALLIED:6,CENTRAL:6});assert.equal(b.planes[0].team,team);
+    b.planes[4].sim.crash('TEST');b.step();assert.equal(b.info().counts[b.planes[4].team],5);const generation=b.planes[4].generation;ticks(b,7);assert.equal(b.planes[4].generation,generation);ticks(b,1.2);assert.equal(b.planes[4].generation,generation+1);assert.deepEqual(b.info().counts,{ALLIED:6,CENTRAL:6});
     const changed=team==='ALLIED'?'CENTRAL':'ALLIED';b.setPlayerTeam(changed);assert.equal(b.playerTeam,changed);assert.equal(b.planes[0].team,changed);
   }
 });
@@ -83,12 +83,23 @@ test('crashes queue a delayed respawn while the world continues indefinitely',()
   const time=b.time;b.planes[4].sim.crash('TEST');ticks(b,30);assert.ok(b.time>time);assert.ok(b.planes[4].generation>0);
   player.sim.grounded=false;player.sim.position.y=500;player.cooldown=0;assert.equal(b.release(),true);
 });
+test('AI stuck watchdog respawns motionless active planes but ignores intentional stops',()=>{
+  const b=match(),p=b.planes[1],monitor=(b as unknown as {monitorAIStuck:(plane:Plane)=>void}).monitorAIStuck.bind(b);
+  b.time=AI_STUCK_SECONDS*2;p.departure='waiting';monitor(p);assert.equal(p.sim.crashed,false);
+  p.departure='taxi';b.time+=AI_STUCK_SECONDS-.1;monitor(p);assert.equal(p.sim.crashed,false);
+  p.sim.position.x+=AI_STUCK_DISTANCE;monitor(p);b.time+=AI_STUCK_SECONDS-.1;monitor(p);assert.equal(p.sim.crashed,false);
+  b.time+=.2;monitor(p);assert.equal(p.sim.crashCause,'AI STUCK');b.step();assert.equal(p.respawnQueued,true);
+  const generation=p.generation;ticks(b,RESPAWN_DELAY+.1);assert.ok(p.generation>generation);
+});
 test('abandoning the player aircraft queues exactly one replacement',()=>{
   const b=match(),player=b.planes[0];assert.equal(b.retirePlayer(),true);assert.equal(player.sim.crashCause,'ABANDONED AIRCRAFT');const respawnAt=player.respawnAt;assert.equal(player.respawnQueued,true);assert.equal(b.retirePlayer(),true);assert.equal(player.respawnAt,respawnAt);
 });
 test('existing gun projectiles sweep moving aircraft and attribute an airborne player kill once',()=>{
-  const b=match(),shooter=b.planes[0],victim=b.planes[PLANES_PER_TEAM];victim.sim.position.set(0,800,0);victim.sim.orientation.identity();victim.sim.velocity.set(0,0,-35);victim.sim.grounded=false;victim.sim.airframeHealth=.17;
-  shooter.gun.projectiles.push({position:new T.Vector3(0,800,6),previous:new T.Vector3(0,800,6),velocity:new T.Vector3(0,0,-650),age:0,tracer:true});b.step();assert.equal(victim.sim.crashCause,'SHOT DOWN');assert.equal(shooter.gun.projectiles.length,0);assert.equal(b.info().enemyAircraftKills,1);assert.ok(b.info().notifications.some(n=>n.text==='Enemy aircraft destroyed'&&n.tone==='positive'));b.step();assert.equal(victim.respawnQueued,true);assert.equal(b.info().enemyAircraftKills,1);
+  const b=match(),shooter=b.planes[0],victim=b.planes[PLANES_PER_TEAM];victim.sim.position.set(0,800,0);victim.sim.orientation.identity();victim.sim.velocity.set(0,0,-35);victim.sim.grounded=false;victim.sim.airframeHealth=.05;
+  shooter.gun.projectiles.push({position:new T.Vector3(0,800,6),previous:new T.Vector3(0,800,6),velocity:new T.Vector3(0,0,-650),age:0,tracer:true});b.step();assert.equal(victim.sim.crashCause,'SHOT DOWN');assert.equal(shooter.gun.projectiles.length,0);assert.equal(b.info().enemyAircraftKills,1);assert.equal(b.info().flightKills,1);assert.ok(b.info().notifications.some(n=>n.text==='Enemy aircraft destroyed · Kills 1'&&n.tone==='positive'));b.step();assert.equal(victim.respawnQueued,true);assert.equal(b.info().enemyAircraftKills,1);
+});
+test('aircraft kill notifications carry a counter that resets for each flight',()=>{
+  const b=match(),record=(b as unknown as {recordKill:(label:string)=>void}).recordKill.bind(b);record('Enemy aircraft destroyed');record('Ground aircraft destroyed');assert.equal(b.info().flightKills,2);assert.deepEqual(b.info().notifications.slice(-2).map(n=>n.text),['Enemy aircraft destroyed · Kills 1','Ground aircraft destroyed · Kills 2']);b.beginPlayerFlight();assert.equal(b.info().flightKills,0);record('Enemy aircraft destroyed');assert.equal(b.info().notifications.at(-1)?.text,'Enemy aircraft destroyed · Kills 1');
 });
 test('hits have a ten-percent leak chance and player leaks report their cumulative count',()=>{
   const b=match('ALLIED',()=>.05),player=b.planes[0],shooter=b.planes[PLANES_PER_TEAM];for(const p of b.planes)if(p!==player&&p!==shooter)p.sim.position.set(3000,800,3000);
@@ -104,7 +115,7 @@ test('friendly runways slowly replenish fuel and every fitted gun',()=>{
   const fuel=s.fuel,ammo=p.gun.roundsRemaining;s.position.set(AIRFIELDS[2].x,terrain.airfieldHeights[2]+1.15,AIRFIELDS[2].z);restock(p,1);assert.equal(s.fuel,fuel);assert.equal(p.gun.roundsRemaining,ammo);
 });
 test('fuel-starved AI abandons combat and glides toward a friendly runway',()=>{
-  const b=match(),p=b.planes[5];p.sim.grounded=false;p.sim.position.set(0,600,0);p.sim.velocity.set(0,-2,-38);p.sim.fuel=0;(b as unknown as {flyAI:(p:Plane,dt:number)=>void}).flyAI(p,DT);assert.ok(p.emergencyField>=0);assert.equal(AIRFIELDS[p.emergencyField].team,p.team);assert.ok(['GLIDE TO RUNWAY','EMERGENCY LANDING','GLIDE RECOVERY'].includes(p.mode));assert.equal(p.gun.trigger,false);
+  const b=match(),p=b.planes[5];p.sim.grounded=false;p.sim.position.set(0,600,0);p.sim.velocity.set(0,-2,-38);p.sim.fuel=0;(b as unknown as {flyAI:(p:Plane,dt:number)=>void}).flyAI(p,DT);assert.ok(p.emergencyField>=0);assert.equal(AIRFIELDS[p.emergencyField].team,p.team);assert.ok(['RETURN TO AIRFIELD','FINAL APPROACH','GLIDE RECOVERY'].includes(p.mode));assert.equal(p.gun.trigger,false);
 });
 test('selected cockpit warnings are amber and edge-triggered',()=>{
   const b=match(),p=b.planes[0],s=p.sim,monitor=(b as unknown as {monitorPlayer:()=>void}).monitorPlayer.bind(b);s.grounded=false;s.fuel=s.spec.fuel*.19;s.engine='running';s.mixtureEfficiency=.4;s.temperature=111;s.rpm=2200;s.stall=true;p.gun.jammed=true;monitor();
@@ -132,6 +143,23 @@ test('rear gunner fires only into clear rear-upper arc and respects own tail and
   bomber.rear.reset();bomber.rear.cock();target.sim.position.set(0,1000,150);for(let i=0;i<20;i++)step(bomber,bomber.rear,true,DT);assert.equal(bomber.rear.roundsFired,0);
   target.sim.position.set(0,1020,-150);for(let i=0;i<20;i++)step(bomber,bomber.rear,true,DT);assert.equal(bomber.rear.roundsFired,0);
   target.sim.position.set(0,1015,150);const friend=b.planes[1];friend.sim.position.set(0,1007.5,75);for(let i=0;i<20;i++)step(bomber,bomber.rear,true,DT);assert.equal(bomber.rear.roundsFired,0);
+});
+test('component hit volumes detach individual structures before the aircraft is destroyed',()=>{
+  const volumes=aircraftHitVolumes(14.4,1.32);assert.deepEqual(new Set(volumes.map(v=>v.component)),new Set(['leftWing','rightWing','tail','engine']));
+  const s=new FlightSimulation();s.aircraftType='fighter';s.reset();const detached=s.damageComponent('leftWing',1);assert.equal(detached,true);assert.equal(s.detachedComponents.has('leftWing'),true);assert.equal(s.componentHealth.rightWing,1);assert.equal(s.crashed,false);assert.ok(s.airframeHealth>0);
+  s.engine='seized';s.service();assert.equal(s.detachedComponents.size,0);assert.deepEqual(s.componentHealth,{leftWing:1,rightWing:1,tail:1,engine:1});assert.equal(s.engine,'off');
+});
+test('pilot perception favours the forward view and being hit creates immediate target memory',()=>{
+  const scan=new T.Vector3(0,0,-1);assert.ok(spottingChance(new T.Vector3(0,0,-1),900,scan)>spottingChance(new T.Vector3(1,0,0),900,scan));assert.ok(spottingChance(new T.Vector3(1,0,0),900,scan)>spottingChance(new T.Vector3(0,-.5,1),900,scan));assert.ok(pilotScanDirection(0,2).distanceTo(pilotScanDirection(5,2))>.2);
+  const b=match(),victim=b.planes[1],shooter=b.planes[PLANES_PER_TEAM];for(const p of b.planes)if(p!==victim&&p!==shooter)p.sim.position.set(3000,800,3000);victim.sim.position.set(0,800,0);victim.previous.copy(victim.sim.position);victim.sim.grounded=false;shooter.sim.position.set(0,800,30);shooter.sim.velocity.set(0,0,-40);
+  (b as unknown as {bulletHit:(shooter:Plane,from:T.Vector3,to:T.Vector3)=>number|null}).bulletHit(shooter,new T.Vector3(0,800,10),new T.Vector3(0,800,-10));assert.equal(victim.target,shooter.id);assert.deepEqual(victim.lastSeenPosition.toArray(),shooter.sim.position.toArray());assert.equal(victim.targetMemoryUntil,b.time+TARGET_MEMORY_SECONDS);assert.ok(victim.underFireUntil>b.time);
+});
+test('AI completes a landing, taxi, service and relaunch cycle without teleporting',()=>{
+  const b=match('ALLIED',()=>.35),p=b.planes.find(candidate=>candidate.team==='CENTRAL'&&candidate.sim.aircraftType==='scout'&&candidate.homeField%2===1)!,field=AIRFIELDS[p.homeField],base=terrain.airfieldHeights[p.homeField],startGeneration=p.generation,stages=new Set<string>();p.departure='flying';p.sim.position.set(field.x,base+85,field.z+1050);p.sim.velocity.set(0,0,-35);p.sim.grounded=false;p.sim.engine='running';p.sim.controls.ignition=true;p.sim.fuel=p.sim.spec.fuel*.2;p.sim.bombsRemaining=0;p.gun.roundsRemaining=4;
+  const fly=(b as unknown as {flyAI:(plane:Plane,dt:number)=>void}).flyAI.bind(b),restock=(b as unknown as {restock:(plane:Plane,dt:number)=>void}).restock.bind(b);let completed=false;
+  for(let i=0;i<260/DT;i++){b.time+=DT;fly(p,DT);p.sim.step(DT);restock(p,DT);stages.add(p.recoveryStage);if(p.recoveryStage==='none'&&(p.departure as string)==='waiting'&&p.generation>startGeneration){completed=true;break;}if(p.sim.crashed)break;}
+  assert.equal(p.sim.crashCause,'');assert.equal(completed,true);for(const stage of['approach','final','rollout','taxi','service'])assert.equal(stages.has(stage),true,stage);assert.equal(p.sim.fuel,p.sim.spec.fuel);assert.equal(p.sim.bombsRemaining,p.sim.spec.bombs);assert.equal(p.gun.roundsRemaining,p.gun.capacity);assert.equal(p.sim.componentHealth.tail,1);assert.ok(AI_SERVICE_SECONDS>=10);
+  let relaunched=false;for(let i=0;i<180/DT;i++){b.time+=DT;fly(p,DT);p.sim.step(DT);if(p.departure==='flying'){relaunched=true;break;}if(p.sim.crashed)break;}assert.equal(p.sim.crashCause,'');assert.equal(relaunched,true);
 });
 void test('rear gunner visibly tracks aim, scans while idle, and gun reports fade with distance',()=>{
   const first=rearGunnerIdleDirection(0,3),later=rearGunnerIdleDirection(4,3);assert.ok(Math.abs(first.length()-1)<1e-12);assert.ok(first.z>0&&later.z>0);assert.ok(first.distanceTo(later)>.1);
