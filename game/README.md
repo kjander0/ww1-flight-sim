@@ -1,4 +1,4 @@
-# Super Flight — continuous airspace and missions
+# Super Flight WW1 — continuous airspace and missions
 
 ## Current world rules
 
@@ -6,11 +6,11 @@ The airspace is continuous: there are no rounds, points, winners, or terminal ma
 
 The hangar shows the full mission list, while the cockpit view shows the easiest incomplete mission. Mission names reveal their requirements on hover. Completion and progress are saved in browser session storage so completed missions survive a refresh in the same browser tab. The missions, in difficulty order, are **Flight School** (take off, climb to 100 m above ground, land safely), **Roll** (complete a barrel roll), **Forest Path** (fly through a close pair of trees below their tops), **Bombs Away** (take off in the bomber and bomb two enemy buildings in that flight), **Strafe** (destroy a grounded enemy aircraft), **First Kill** (shoot down an airborne enemy), **Stunt Pilot** (complete a loop), **Bully** (kill an AI-piloted enemy aircraft with a player bomb), and **Ace** (shoot down five enemies without crashing).
 
-The bomber carries four 30 kg bombs, two beneath each wing. The first cockpit click opens the square BOMB RELEASE guard; subsequent clicks on the exposed button, or the minimal HUD button, drop one at a time while alternating wings. Release is inhibited on the ground and debounced. Bombs inherit aircraft velocity, fall under gravity/drag, sweep terrain/buildings and produce a blast. Released racks disappear and payload mass decreases. Bombed buildings become rubble and lose their intact collision volume, while aircraft inside the lethal blast radius are destroyed.
+The bomber carries four 30 kg bombs, two beneath each wing. The first cockpit click opens the square BOMB RELEASE guard; subsequent clicks on the exposed button drop one at a time while alternating wings. Release is inhibited on the ground and debounced. Bombs inherit aircraft velocity, fall under gravity/drag, sweep terrain/buildings and produce a blast. Released racks disappear and payload mass decreases. Bombed buildings become rubble and lose their intact collision volume, while aircraft inside the lethal blast radius are destroyed.
 
-AI uses the same flight simulation and machine-gun ballistics as the player, with pursuit/lead, bursts, jam clearing, engine management, turning and diving attacks, overshoot attempts, terrain avoidance and bombing passes. After taking damage, an AI pilot may evade for 15–25 seconds, holding each changing turn-and-dive direction for 1–4 seconds before returning to normal tactics. Bomber rear gunners have a rear-upper firing arc and hold fire for friendly aircraft in their lane. Aircraft hits use swept moving collision boxes and airframe health. Forward guns fire at 600 RPM from 100-round belts with every third round a tracer; bomber rear guns retain 250 rounds. Gun heat now builds and dissipates at twice the original rate. The fighter has two independently operated forward guns, each with its own sight, trigger, action, heat, and ammunition.
+AI uses the same flight simulation and machine-gun ballistics as the player, with pursuit/lead, bursts, jam clearing, engine management, turning and diving attacks, overshoot attempts, terrain avoidance and bombing passes. After taking damage, an AI pilot may evade for 15–25 seconds, holding each changing turn-and-dive direction for 1–4 seconds before returning to normal tactics. Bomber rear gunners visibly follow their lead aim, scan the rear sky while idle, have a rear-upper firing arc, and hold fire for friendly aircraft in their lane. Their gun reports are audible with distance falloff. Aircraft hits use swept moving collision boxes and airframe health. Forward guns fire at 600 RPM from 100-round belts with every third round a tracer; bomber rear guns retain 250 rounds. Gun heat now builds and dissipates at twice the original rate. The fighter has two independently operated forward guns, each with its own sight, trigger, action, heat, and ammunition.
 
-AI re-enters after an eight-second loss delay; each replacement reuses its roster slot. The hangar selects aircraft and airfield without resetting the world. Ammo, bomb, airframe, and navigation displays read the same continuous world state as physics.
+AI re-enters after an eight-second loss delay; each replacement reuses its roster slot. The hangar selects aircraft and airfield without resetting the world. Ammo, bomb, airframe, and navigation displays read the same continuous world state as physics. Aircraft on a friendly runway slowly replenish fuel and all fitted gun ammunition.
 
 Automated checks cover continuous AI activity, replacements, side changes, mission sequencing and persistence, roll accumulation, close-tree geometry, player bomb attribution, bomb racks/payload, swept hits, friendly-fire inhibition, and model lifecycle. These are headless checks, not a browser playtest or hardware frame-rate benchmark. AI tactics are an initial controller with direct target knowledge, airborne reinforcements and simplified damage; calibrated historical handling, realistic perception and automated runway circuits remain future work.
 
@@ -28,7 +28,7 @@ Create a static HTML5 release ZIP from PowerShell with:
 npm run build:itch -- --Version 0.1.0
 ```
 
-The script writes `releases/super-flight-0.1.0-itch.zip`. The archive has
+The script writes `releases/super-flight-ww1-0.1.0-itch.zip`. The archive has
 `index.html` at its root and uses relative asset paths so it can run from an
 itch.io HTML Game page. The normal development and deployment builds are
 unchanged.
@@ -48,14 +48,14 @@ unchanged.
 
 - Fixed 60 Hz force-based flight model with interpolated rendering, angle-of-attack stalls, damped control rates, automatic turn coordination and wind.
 - Data-driven scout, fast fighter and light bomber with different mass, wing area, span, engine power, fuel capacity and agility. Bomber payload contributes to mass.
-- Torque/load RPM, altitude-dependent mixture, gradual heating/cooling, aerodynamic radiator drag, finite fuel and accumulated overheat/overspeed engine damage.
+- Torque/load RPM, altitude-dependent mixture, gradual heating/cooling, aerodynamic radiator drag, finite fuel, cumulative hit-triggered fuel leaks and accumulated overheat/overspeed engine damage.
 - Six cockpit instruments: altitude, indicated airspeed, pitch/bank level, RPM, coolant temperature and fuel. Optional numeric telemetry includes radiator drag.
 - Persistent pointer controls with capture, cancel/focus-loss handling and circular wheel winding, including angle-wrap/hub handling.
 - Seeded 1,025 × 1,025 heightfield shared by ground physics and rendering. Terrain is divided into 256 chunks with four LODs and skirts; airfields are flattened and blended into the surrounding hills.
 - Four airfields, river valley, villages/roads, team markings, procedural signs and instanced crossed-quad trees in spatial batches. Runways and extended approaches exclude trees.
 - Ground contact and rolling friction, braking, damaging touchdowns, swept aircraft/scenery collisions and spatial broad-phase filtering. Aircraft collision width adapts to the wider bomber.
 - Severity-scaled crash fragmentation (12–96 box fragments derived from the airframe), ballistic motion, bounce/friction and sleeping. Pilot-camera ejection/tumble; reset clears effects and restores the aircraft.
-- Damage and combat feedback includes persistent engine smoke and embers, muzzle flashes, cockpit splinters, ground-roll dust, terrain strikes, water splashes, bomb blasts, crash bursts, and severity-scaled camera shake for hits, nearby explosions and crashes.
+- Damage and combat feedback includes persistent engine smoke and embers, visible fuel trails, muzzle flashes, cockpit splinters, ground-roll dust, terrain strikes, water splashes, bomb blasts, crash bursts, severity-scaled camera shake, and short green/amber notifications for important outcomes and warnings.
 - Two-pass rendering: world at 420 pixels vertically with nearest-neighbour upscale, cockpit separately for readable text. Models, textures, instrument faces and signs are generated at runtime without external assets.
 - Optional feature-detected WebMCP instrument readback and sortie reset, sharing actual game state.
 
@@ -65,7 +65,7 @@ Flight regression checks include all twelve aircraft/airfield departure combinat
 
 The generated-world test constructs actual geometry with canvas drawing stubbed, checks 256 chunks and four LODs per chunk, matches rendered airfield surfaces to physics heights, and checks runway/approach clearance with bomber collision dimensions. Bomber takeoff trajectories are also checked against the generated scenery. This is geometry/physics validation, not browser visual QA. TypeScript, production build and a local HTTP route response are checked separately.
 
-Map-edge warning and a 700 m out-of-bounds margin precede an aircraft loss. Detailed fluid leaks and component damage, AI landing/rearming and advanced tactics remain future work. Bullet cover includes terrain and airfield buildings; decorative trees and village houses are not yet bullet cover. Aircraft still collide with their scenery proxies. Wreckage uses simple visual physics.
+Map-edge warning and a 700 m out-of-bounds margin precede an aircraft loss. Fuel-starved AI aircraft attempt a power-off landing at a friendly runway. Detailed component damage, routine AI landing/rearming and advanced tactics remain future work. Bullet cover includes terrain and airfield buildings; decorative trees and village houses are not yet bullet cover. Aircraft still collide with their scenery proxies. Wreckage uses simple visual physics.
 
 Flight coefficients are gameplay parameters, not verified historical aircraft data. Ground contact uses a terrain non-penetration constraint rather than separate wheel suspension; terrain strikes are checked at the aircraft centre/gear, while scenery uses overlapping swept spheres. The larger airframes use slightly conservative collision radii. Debris uses boxes and a single ground radius per piece. Manual full circuits, cockpit visual checks and hardware performance benchmarking have not been recorded for this iteration. Optional WebMCP tools remain unverified in a supporting browser.
 

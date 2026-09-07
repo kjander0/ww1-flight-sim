@@ -9,15 +9,16 @@ export class WorldView {
   private target(id:string,intact:T.Group,size:number[]){const rubble=this.box(intact.parent!,[size[0],1.5,size[1]],[intact.position.x,.75,intact.position.z],this.material('#393b32'));rubble.visible=false;this.targets.set(id,{intact,rubble});}
   private materials: T.Material[]=[]; private textures:T.Texture[]=[];
   private grass = new T.MeshLambertMaterial({vertexColors:true,flatShading:true});
+  private skirts = new T.MeshLambertMaterial({vertexColors:true});
   constructor(private scene:T.Scene,readonly terrain:Terrain,private collisions:SceneryCollisions) {
-    this.materials.push(this.grass);this.buildTerrain();this.buildAirfields();this.buildScenery();
+    this.materials.push(this.grass,this.skirts);this.buildTerrain();this.buildAirfields();this.buildScenery();
   }
   private material(color:string){const m=new T.MeshLambertMaterial({color,flatShading:true});this.materials.push(m);return m;}
   private box(parent:T.Object3D,size:number[],position:number[],mat:T.Material){const m=new T.Mesh(new T.BoxGeometry(...size as [number,number,number]),mat);m.position.set(...position as [number,number,number]);parent.add(m);return m;}
   private buildTerrain(){
     for(let z=0;z<16;z++)for(let x=0;x<16;x++){
       const lod=new T.LOD();lod.position.set(x*625-4687.5,0,z*625-4687.5);
-      for(const [stride,distance] of [[1,0],[2,950],[4,1900],[8,3600]])lod.addLevel(new T.Mesh(this.chunk(x,z,stride),this.grass),distance);
+      for(const [stride,distance] of [[1,0],[2,950],[4,1900],[8,3600]])lod.addLevel(new T.Mesh(this.chunk(x,z,stride),[this.grass,this.skirts]),distance);
       this.scene.add(lod);
     }
     const vertices:number[]=[],indices:number[]=[];
@@ -36,11 +37,18 @@ export class WorldView {
     }
     for(let z=0;z<segments;z++)for(let x=0;x<segments;x++){const a=z*(segments+1)+x,b=a+1,c=a+segments+1,d=c+1;indices.push(a,c,b,b,c,d);}
     // Vertical skirts hide cracks where neighboring chunks use different LODs.
+    const surfaceIndexCount=indices.length;
     const edge:number[]=[];for(let x=0;x<=segments;x++)edge.push(x);for(let z=1;z<=segments;z++)edge.push(z*(segments+1)+segments);for(let x=segments-1;x>=0;x--)edge.push(segments*(segments+1)+x);for(let z=segments-1;z>0;z--)edge.push(z*(segments+1));
-    const bottomStart=positions.length/3;
+    // Give skirts their own vertices and upward lighting. They still cover LOD
+    // cracks, but no longer read as dark vertical walls along chunk borders.
+    const skirtTop=positions.length/3;
+    for(const i of edge){positions.push(positions[i*3],positions[i*3+1],positions[i*3+2]);colors.push(colors[i*3],colors[i*3+1],colors[i*3+2]);}
+    const skirtBottom=positions.length/3;
     for(const i of edge){positions.push(positions[i*3],positions[i*3+1]-30,positions[i*3+2]);colors.push(colors[i*3],colors[i*3+1],colors[i*3+2]);}
-    for(let k=0;k<edge.length;k++){const n=(k+1)%edge.length;indices.push(edge[k],bottomStart+k,edge[n],edge[n],bottomStart+k,bottomStart+n);}
-    const geometry=new T.BufferGeometry();geometry.setAttribute('position',new T.Float32BufferAttribute(positions,3));geometry.setAttribute('color',new T.Float32BufferAttribute(colors,3));geometry.setIndex(indices);geometry.computeVertexNormals();geometry.computeBoundingSphere();return geometry;
+    for(let k=0;k<edge.length;k++){const n=(k+1)%edge.length;indices.push(skirtTop+k,skirtBottom+k,skirtTop+n,skirtTop+n,skirtBottom+k,skirtBottom+n);}
+    const geometry=new T.BufferGeometry();geometry.setAttribute('position',new T.Float32BufferAttribute(positions,3));geometry.setAttribute('color',new T.Float32BufferAttribute(colors,3));geometry.setIndex(indices);geometry.addGroup(0,surfaceIndexCount,0);geometry.addGroup(surfaceIndexCount,indices.length-surfaceIndexCount,1);geometry.computeVertexNormals();
+    const normals=geometry.getAttribute('normal');for(let i=skirtTop;i<positions.length/3;i++)normals.setXYZ(i,0,1,0);normals.needsUpdate=true;
+    geometry.computeBoundingSphere();return geometry;
   }
   private buildAirfields(){
     const runway=this.material('#a09a76'),chalk=this.material('#ddd1a4'),timber=this.material('#685a41'),roof=this.material('#424e43'),door=this.material('#202c25');

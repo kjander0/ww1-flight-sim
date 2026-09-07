@@ -12,6 +12,7 @@ export class ParticleEffects {
   private points:T.Points;
   private smokeClock=new Map<number,number>();
   private dustClock=new Map<number,number>();
+  private fuelClock=new Map<number,number>();
   constructor(private scene:T.Scene,private ground:(x:number,z:number)=>number,private random:()=>number=Math.random,private isWater:(x:number,z:number)=>boolean=()=>false){
     this.geometry.setAttribute('position',new T.BufferAttribute(this.positions,3));
     this.geometry.setAttribute('color',new T.BufferAttribute(this.colors,3));
@@ -67,6 +68,14 @@ export class ParticleEffects {
         const rate=T.MathUtils.clamp((s.groundSpeed-4)/15,0,1)*9,dust=(this.dustClock.get(plane.id)??0)+dt*rate,count=Math.floor(dust);this.dustClock.set(plane.id,dust-count);
         for(let i=0;i<count;i++){const pos=new T.Vector3((this.random()-.5)*s.spec.span*.22,-.72,1.3+this.random()).applyQuaternion(s.orientation).add(s.position);pos.y=Math.max(pos.y,this.ground(pos.x,pos.z)+.12);this.add(pos,s.velocity.clone().multiplyScalar(.08).add(new T.Vector3((this.random()-.5)*1.4,.6+this.random(),(this.random()-.5)*1.4)),new T.Color('#a99a73'),.45+this.random()*.55,.8+this.random()*.7,.8,-.08);}
       }
+      if(s.fuelLeaks>0&&s.fuel>0){
+        const rate=10*s.fuelLeaks,clock=(this.fuelClock.get(plane.id)??0)+dt*rate,count=Math.floor(clock);this.fuelClock.set(plane.id,clock-count);
+        for(let i=0;i<count;i++){
+          const leak=(i+Math.floor(this.random()*s.fuelLeaks))%s.fuelLeaks,x=(leak-(s.fuelLeaks-1)/2)*Math.min(1.1,s.spec.span*.08);
+          const pos=new T.Vector3(x,-.22,2.2+.25*(leak%3)).applyQuaternion(s.orientation).add(s.position),trail=new T.Vector3(0,-.25,5+this.random()*3).applyQuaternion(s.orientation);
+          this.add(pos,s.velocity.clone().multiplyScalar(.58).add(trail).add(new T.Vector3((this.random()-.5)*.7,(this.random()-.5)*.5,(this.random()-.5)*.7)),new T.Color(i%3===0?'#e8d9a7':'#c7d8c7'),.14+this.random()*.11,.65+this.random()*.55,.18,1.1);
+        }
+      }
       const damage=Math.max(1-s.health,1-s.airframeHealth),badMix=s.engine==='off'?0:Math.max(0,.62-s.mixtureEfficiency);
       if(damage>=.08||badMix>=.08){
         const rate=2+damage*20+badMix*18,clock=(this.smokeClock.get(plane.id)??0)+dt*rate;
@@ -84,7 +93,7 @@ export class ParticleEffects {
     const count=Math.min(this.particles.length,MAX_PARTICLES);for(let i=0;i<count;i++){const p=this.particles[i],fade=1-p.age/p.life,ii=i*3;this.positions[ii]=p.position.x;this.positions[ii+1]=p.position.y;this.positions[ii+2]=p.position.z;this.colors[ii]=p.color.r*fade;this.colors[ii+1]=p.color.g*fade;this.colors[ii+2]=p.color.b*fade;this.sizes[i]=p.size*(1+p.age/p.life*.9);}
     this.geometry.setDrawRange(0,count);(this.geometry.attributes.position as T.BufferAttribute).needsUpdate=true;(this.geometry.attributes.color as T.BufferAttribute).needsUpdate=true;(this.geometry.attributes.size as T.BufferAttribute).needsUpdate=true;
   }
-  reset(){this.particles.length=0;this.smokeClock.clear();this.dustClock.clear();this.geometry.setDrawRange(0,0);}
+  reset(){this.particles.length=0;this.smokeClock.clear();this.dustClock.clear();this.fuelClock.clear();this.geometry.setDrawRange(0,0);}
   dispose(){this.points.removeFromParent();this.geometry.dispose();(this.points.material as T.Material).dispose();}
   private burst(position:T.Vector3,base:T.Vector3,color:string,count:number,speed:number,life:number,size:number){for(let i=0;i<count;i++){const velocity=base.clone().add(new T.Vector3(this.random()-.5,this.random()*.8-.15,this.random()-.5).normalize().multiplyScalar(speed*(.35+this.random())));this.add(position,velocity,new T.Color(color),size*(.65+this.random()*.7),life*(.7+this.random()*.6),.5,7);}}
   private smoke(position:T.Vector3,color:string,count:number,size:number,life:number){for(let i=0;i<count;i++)this.add(position,new T.Vector3((this.random()-.5)*2,1+this.random()*3,(this.random()-.5)*2),new T.Color(color),size*(.7+this.random()),life*(.75+this.random()*.5),.35,-.15);}

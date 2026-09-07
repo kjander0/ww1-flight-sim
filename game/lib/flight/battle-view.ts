@@ -10,6 +10,13 @@ export function haloStrength(distance:number){
   return .06+t*t*(3-2*t)*.54;
 }
 
+export function pointRearGunner(mount:T.Object3D,gunner:T.Object3D,direction:T.Vector3,amount=1){
+  const aim=direction.clone().normalize(),target=new T.Quaternion().setFromUnitVectors(new T.Vector3(0,0,1),aim);
+  mount.quaternion.slerp(target,amount);
+  const look=new T.Quaternion().setFromAxisAngle(new T.Vector3(0,1,0),Math.atan2(aim.x,aim.z));
+  gunner.quaternion.slerp(look,Math.min(1,amount*.72));
+}
+
 export function bombModel(){
   const group=new T.Group(),mat=new T.MeshLambertMaterial({color:'#333b30',flatShading:true});
   const body=new T.Mesh(new T.CylinderGeometry(.12,.16,.75,8),mat);body.rotation.x=Math.PI/2;group.add(body);
@@ -18,6 +25,7 @@ export function bombModel(){
 }
 function aircraftModel(type:AircraftType,side:Team,carryBombs=true){
   const spec=AIRCRAFT[type],g=new T.Group(),body=new T.MeshLambertMaterial({color:spec.color,flatShading:true}),canvas=new T.MeshLambertMaterial({color:spec.canvas,flatShading:true}),dark=new T.MeshLambertMaterial({color:'#28322e'}),team=new T.MeshLambertMaterial({color:side==='ALLIED'?'#72b7d4':'#e56749'});
+  const rearMount=new T.Group(),rearGunner=new T.Group();
   const box=(size:number[],pos:number[],mat:T.Material)=>{const m=new T.Mesh(new T.BoxGeometry(...size as [number,number,number]),mat);m.position.set(...pos as [number,number,number]);g.add(m);return m;};
   box([1,.8,6*spec.length],[0,-.15,.1],body);for(const y of[-.3,1.48])box([spec.span,.1,1.6],[0,y,-1.4],canvas);
   box([2.5*spec.span/8.8,.08,.9],[0,-.25,4.1*spec.length],canvas);box([.09,1.15,.9],[0,.25,4.1*spec.length],team);
@@ -29,8 +37,16 @@ function aircraftModel(type:AircraftType,side:Team,carryBombs=true){
   }else {const spinner=new T.Group();spinner.position.set(0,0,-3.52);prop.add(spinner);spinner.add(box([.12,1.8,.07],[0,0,0],dark));}
   box([.07,.07,2.5],[.34,.5,-2],dark);
   for(const x of[-.76,.76]){const wheel=new T.Mesh(new T.CylinderGeometry(.38,.38,.12,10),dark);wheel.rotation.z=Math.PI/2;wheel.position.set(x,-.77,-1.3);g.add(wheel);}
-  if(type==='bomber'){box([.35,.65,.35],[0,.45,2.4],dark);box([.07,.07,1.4],[.2,.65,3.1],dark);}
-  const bombs:T.Group[]=[];if(carryBombs)for(let i=0;i<spec.bombs;i++){const b=bombModel();b.position.copy(rackPosition(i,spec.span));g.add(b);bombs.push(b);}return{g,prop,bombs};
+  if(type==='bomber'){
+    const ring=new T.Mesh(new T.TorusGeometry(.42,.045,6,18),dark);ring.rotation.x=Math.PI/2;ring.position.set(0,.11,2.35);g.add(ring);
+    rearGunner.position.set(0,.27,2.35);g.add(rearGunner);
+    const torso=new T.Mesh(new T.BoxGeometry(.36,.48,.3),new T.MeshLambertMaterial({color:'#534735',flatShading:true}));torso.position.set(0,.15,.08);rearGunner.add(torso);
+    const head=new T.Mesh(new T.IcosahedronGeometry(.14,1),new T.MeshLambertMaterial({color:'#9d7859',flatShading:true}));head.position.set(0,.43,.15);rearGunner.add(head);
+    rearMount.position.set(.22,.48,2.45);g.add(rearMount);
+    const barrel=new T.Mesh(new T.CylinderGeometry(.034,.034,1.05,5),dark);barrel.rotation.x=Math.PI/2;barrel.position.z=.525;rearMount.add(barrel);
+    const receiver=new T.Mesh(new T.BoxGeometry(.13,.12,.28),dark);receiver.position.z=.08;rearMount.add(receiver);
+  }
+  const bombs:T.Group[]=[];if(carryBombs)for(let i=0;i<spec.bombs;i++){const b=bombModel();b.position.copy(rackPosition(i,spec.span));g.add(b);bombs.push(b);}return{g,prop,bombs,rearMount,rearGunner};
 }
 function parkedWreck(target:ParkedPlane){
   const g=new T.Group(),spec=AIRCRAFT[target.type],charred=new T.MeshLambertMaterial({color:'#292b26',flatShading:true}),canvas=new T.MeshLambertMaterial({color:'#51483a',flatShading:true});
@@ -56,6 +72,7 @@ export class BattleView {
       if(camera){const distance=camera.position.distanceTo(halo.position);halo.quaternion.copy(camera.quaternion);halo.scale.setScalar(Math.max(p.sim.spec.span*.58,distance*.006));haloUniforms.strength.value=haloStrength(distance);}
       if(m.generation!==p.generation){m.effects.reset();m.g.visible=true;m.generation=p.generation;}
       m.g.position.lerpVectors(p.previous,p.sim.position,alpha);m.g.quaternion.slerpQuaternions(p.rotation,p.sim.orientation,alpha);
+      if(p.sim.aircraftType==='bomber')pointRearGunner(m.rearMount,m.rearGunner,p.rearAim,Math.min(1,dt*7));
       for(const spinner of m.prop.children)spinner.rotation.z+=p.sim.rpm*Math.PI/30*dt;m.bombs.forEach((b,i)=>b.visible=i>=p.sim.spec.bombs-p.sim.bombsRemaining);
       if(p.sim.crashed&&!m.effects.active){m.g.position.copy(p.sim.position);m.g.quaternion.copy(p.sim.orientation);m.camera.position.copy(p.sim.position);m.effects.start(m.g,p.sim.impactVelocity,p.sim.impactSpeed,m.camera);}
       m.effects.update(dt,m.camera);

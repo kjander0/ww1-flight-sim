@@ -5,6 +5,7 @@ export const DT = 1 / 60;
 export const BRAKE_DECELERATION = 3.3;
 export const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 export const SPEC = { dryMass: 675, wingArea: 25, fuel: 55, stallAngle: .28, groundHeight: 1.15, maxRpm: 1900 };
+export const FUEL_LEAK_RATE=.25;
 export const MIXTURE_MANAGEMENT_ALTITUDE = 2000;
 export const RADIATOR_DRAG_COEFFICIENT = .014;
 export const PITCH_TRIM_ALPHA = .015;
@@ -46,7 +47,7 @@ export class FlightSimulation {
   position = new Vector3(0, SPEC.groundHeight, 330);
   velocity = new Vector3(); orientation = new Quaternion(); rates = new Vector3();
   controls = { throttle: 0, mixture: .85, radiator: .5, pitch: 0, roll: 0, ignition: false, brake: true };
-  fuel: number = SPEC.fuel; temperature = 15; health = 1; rpm = 0; time = 0;
+  fuel: number = SPEC.fuel; fuelLeaks=0; temperature = 15; health = 1; rpm = 0; time = 0;
   alpha = 0; airspeed = 0; lift = 0; drag = 0; thrust = 0;
   grounded = true; crashed = false; stall = false;
   engine: 'off' | 'starting' | 'running' | 'seized' = 'off';
@@ -65,7 +66,7 @@ export class FlightSimulation {
     this.position.copy(this.spawn); this.velocity.set(0, 0, 0); this.orientation.identity(); this.rates.set(0, 0, 0);
     this.bombsRemaining=this.spec.bombs;this.airframeHealth=1;
     Object.assign(this.controls, { throttle: 0, mixture: .85, radiator: .5, pitch: 0, roll: 0, ignition: false, brake: true });
-    this.fuel = this.spec.fuel; this.temperature = 15; this.health = 1; this.rpm = 0; this.time = 0; this.alpha = 0;
+    this.fuel = this.spec.fuel; this.fuelLeaks=0; this.temperature = 15; this.health = 1; this.rpm = 0; this.time = 0; this.alpha = 0;
     this.airspeed = 0; this.lift = 0; this.drag = 0; this.thrust = 0; this.grounded = true; this.crashed = false;
     this.stall = false; this.engine = 'off'; this.cranking = 0; this.crashCause = '';
     this.impactSpeed = 0; this.impactVelocity.set(0,0,0); this.radiatorDrag = 0;
@@ -111,6 +112,7 @@ export class FlightSimulation {
     if (running && this.mixtureEfficiency < .08) this.engine = 'off';
     this.thrust = (running ? this.spec.thrust : 0) * (this.rpm / 1850) ** 2 / (1 + (this.airspeed / 45) ** 2);
     if (running) this.fuel = Math.max(0, this.fuel - 2 * (.0007 + c.throttle * .007) * this.spec.torque/470 * dt);
+    if(this.fuelLeaks>0)this.fuel=Math.max(0,this.fuel-this.fuelLeaks*FUEL_LEAK_RATE*dt);
     const heating = running ? .16 + c.throttle * .56 + (1 - this.mixtureEfficiency) * .2 : 0;
     const cooling = (this.temperature - 15) * (.0015 + c.radiator * (.0065 + this.airspeed * .0003));
     this.temperature = Math.max(15, this.temperature + (heating - cooling) * dt);

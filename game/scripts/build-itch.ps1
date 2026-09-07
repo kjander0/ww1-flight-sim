@@ -9,7 +9,7 @@ $projectDirectory = Split-Path -Parent $PSScriptRoot
 $buildDirectory = Join-Path $projectDirectory 'dist\client'
 $releaseDirectory = Join-Path $projectDirectory 'releases'
 $stagingDirectory = Join-Path $releaseDirectory 'itch'
-$archivePath = Join-Path $releaseDirectory "super-flight-$Version-itch.zip"
+$archivePath = Join-Path $releaseDirectory "super-flight-ww1-$Version-itch.zip"
 
 Push-Location $projectDirectory
 try {

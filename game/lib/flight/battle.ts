@@ -4,7 +4,7 @@ import { FlightSimulation, DT, clamp, optimalMixture, pitchInputForAlpha } from 
 import { FORWARD_GUN_ELEVATION, MachineGun, MUZZLE_VELOCITY, REAR_AMMO_CAPACITY, REAR_GUN_MUZZLE_VELOCITY } from './weapons';
 import { readAttitude } from './attitude';
 import { SceneryCollisions } from './collisions';
-import { parkingPosition } from './airfield-ops';
+import { parkingPosition, runwayAt } from './airfield-ops';
 import { AIRCRAFT, type AircraftType } from './aircraft';
 
 export type Team='ALLIED'|'CENTRAL';
@@ -12,13 +12,17 @@ export const opponent=(team:Team):Team=>team==='ALLIED'?'CENTRAL':'ALLIED';
 export const RESPAWN_DELAY=8, BLAST_KILL_RADIUS=32;
 export const FORWARD_GUN_DAMAGE=.18;
 export const PLANES_PER_TEAM=5;
+export const FUEL_RESTOCK_RATE=1, AMMO_RESTOCK_RATE=4;
+export const REAR_GUN_AIM_ERROR=.0045;
 export type Building={id:string;team:Team;kind:'HANGAR'|'TOWER';position:T.Vector3;bounds:T.Box3;destroyed:boolean};
 export type ParkedPlane={id:string;team:Team;type:AircraftType;position:T.Vector3;rotation:T.Quaternion;bounds:T.Box3;health:number;destroyed:boolean};
-export type Plane={id:number;team:Team;sim:FlightSimulation;gun:MachineGun;secondary:MachineGun;rear:MachineGun;previous:T.Vector3;rotation:T.Quaternion;generation:number;respawnQueued:boolean;respawnAt:number;mode:string;target:number;decision:number;cooldown:number;runTarget:string;runStage:'approach'|'pass'|'egress'|'dogleg';homeField:number;departure:'waiting'|'taxi'|'lineup'|'takeoff'|'climb'|'flying';previousHealth:number;evasiveUntil:number;evasiveDirection:number;evasiveDive:number;evasiveTurnAt:number};
+export type Plane={id:number;team:Team;sim:FlightSimulation;gun:MachineGun;secondary:MachineGun;rear:MachineGun;rearAim:T.Vector3;previous:T.Vector3;rotation:T.Quaternion;generation:number;respawnQueued:boolean;respawnAt:number;mode:string;target:number;decision:number;cooldown:number;runTarget:string;runStage:'approach'|'pass'|'egress'|'dogleg';homeField:number;departure:'waiting'|'taxi'|'lineup'|'takeoff'|'climb'|'flying';previousHealth:number;evasiveUntil:number;evasiveDirection:number;evasiveDive:number;evasiveTurnAt:number;emergencyField:number;emergencyDirection:-1|1;emergencyStage:'approach'|'final'};
 export type Bomb={id:number;ownerId:number;team:Team;position:T.Vector3;previous:T.Vector3;velocity:T.Vector3;age:number};
 export type Blast={id:number;position:T.Vector3;age:number};
 export type EffectEvent={kind:'hit'|'damage'|'muzzle'|'crash'|'explosion';position:T.Vector3;velocity:T.Vector3;intensity:number;targetId?:number;cause?:string};
-export type BattleInfo={team:Team;counts:Record<Team,number>;bombs:number;ammo:number;health:number;respawn:number;message:string;enemyBuildingsBombed:number;enemyAircraftStrafed:number;enemyAircraftKills:number;enemyAircraftBombed:number;contacts:{id:number;team:Team;x:number;z:number}[]};
+export type NotificationTone='positive'|'warning';
+export type NotificationEvent={id:number;text:string;tone:NotificationTone};
+export type BattleInfo={team:Team;counts:Record<Team,number>;bombs:number;ammo:number;health:number;respawn:number;message:string;notifications:NotificationEvent[];enemyBuildingsBombed:number;enemyAircraftStrafed:number;enemyAircraftKills:number;enemyAircraftBombed:number;contacts:{id:number;team:Team;x:number;z:number}[]};
 
 export function createBuildings(terrain:Terrain):Building[]{return AIRFIELDS.flatMap((f,index)=>{
   const base=terrain.airfieldHeights[index];return [0,1,2,3].map(i=>{
@@ -49,13 +53,29 @@ export function terrainHit(a:T.Vector3,b:T.Vector3,height:(x:number,z:number)=>n
 export function forwardGunDirection(orientation:T.Quaternion){
   return new T.Vector3(0,Math.sin(FORWARD_GUN_ELEVATION),-Math.cos(FORWARD_GUN_ELEVATION)).applyQuaternion(orientation);
 }
+/** A slow, overlapping scan of the rear hemisphere when there is no valid target. */
+export function rearGunnerIdleDirection(time:number,planeId=0){
+  const yaw=Math.sin(time*.43+planeId*1.71)*.78+Math.sin(time*.17+planeId*.63)*.18;
+  const pitch=.2+Math.sin(time*.31+planeId*1.13)*.1;
+  const cp=Math.cos(pitch);
+  return new T.Vector3(Math.sin(yaw)*cp,Math.sin(pitch),Math.cos(yaw)*cp).normalize();
+}
+export function rearGunnerShotDirection(aim:T.Vector3,time:number,planeId=0){
+  const direction=aim.clone().normalize(),helper=Math.abs(direction.y)<.9?new T.Vector3(0,1,0):new T.Vector3(1,0,0),right=new T.Vector3().crossVectors(direction,helper).normalize(),up=new T.Vector3().crossVectors(right,direction).normalize();
+  const horizontal=(Math.sin(time*1.31+planeId*1.77)+Math.sin(time*.47+planeId*.83)*.35)*REAR_GUN_AIM_ERROR,vertical=(Math.cos(time*1.07+planeId*1.19)+Math.sin(time*.61+planeId*2.03)*.3)*REAR_GUN_AIM_ERROR;
+  return direction.addScaledVector(right,horizontal).addScaledVector(up,vertical).normalize();
+}
 export function gunHitDamage(target:AircraftType,rear:boolean){return (target==='bomber'?1/8:FORWARD_GUN_DAMAGE)*(rear?.5:1);}
 
 /** Ten fixed roster slots; the player's slot is never replaced by an eleventh plane. */
 export class Battle {
   planes:Plane[]=[];buildings:Building[];parkedPlanes:ParkedPlane[];bombs:Bomb[]=[];blasts:Blast[]=[];effects:EffectEvent[]=[];
+  notifications:NotificationEvent[]=[];
   time=0;message='AIRSPACE ACTIVE';enemyBuildingsBombed=0;enemyAircraftStrafed=0;enemyAircraftKills=0;enemyAircraftBombed=0;
-  private serial=0;
+  private serial=0;private notificationSerial=0;private lastFriendlyFire=-Infinity;
+  private servicing=new Set<number>();private fuelRestocked=new Set<number>();private ammoRestocked=new Set<number>();
+  private ammoRestockProgress=new Map<MachineGun,number>();
+  private warningState={fuelLow:false,fuelEmpty:false,badMixture:false,overheating:false,overspeed:false,stall:false,seized:false,rightJammed:false,leftJammed:false};
   constructor(readonly terrain:Terrain,player:FlightSimulation,gun:MachineGun,public playerTeam:Team='ALLIED',private random:()=>number=Math.random,private scenery?:SceneryCollisions,secondaryGun=new MachineGun(random)){
     this.buildings=createBuildings(terrain);
     this.parkedPlanes=createParkedPlanes(terrain);
@@ -64,7 +84,7 @@ export class Battle {
       const team=id<PLANES_PER_TEAM?playerTeam:opponent(playerTeam),sim=id===0?player:new FlightSimulation();
       if(id!==0){sim.aircraftType=id%4===3?'bomber':id%2===0?'fighter':'scout';sim.groundHeightAt=terrain.heightAt;sim.isWaterAt=(x,z)=>terrain.isWater(x,z);}
       const fields=AIRFIELDS.map((f,i)=>f.team===team?i:-1).filter(i=>i>=0);
-      const p:Plane={id,team,sim,gun:id===0?gun:new MachineGun(random),secondary:id===0?secondaryGun:new MachineGun(random),rear:new MachineGun(random,REAR_GUN_MUZZLE_VELOCITY,REAR_AMMO_CAPACITY),previous:sim.position.clone(),rotation:sim.orientation.clone(),generation:0,respawnQueued:false,respawnAt:0,mode:'PATROL',target:-1,decision:0,cooldown:0,runTarget:'',runStage:'approach',homeField:fields[id%2],departure:'waiting',previousHealth:1,evasiveUntil:0,evasiveDirection:1,evasiveDive:.5,evasiveTurnAt:0};
+      const p:Plane={id,team,sim,gun:id===0?gun:new MachineGun(random),secondary:id===0?secondaryGun:new MachineGun(random),rear:new MachineGun(random,REAR_GUN_MUZZLE_VELOCITY,REAR_AMMO_CAPACITY),rearAim:rearGunnerIdleDirection(0,id),previous:sim.position.clone(),rotation:sim.orientation.clone(),generation:0,respawnQueued:false,respawnAt:0,mode:'PATROL',target:-1,decision:0,cooldown:0,runTarget:'',runStage:'approach',homeField:fields[id%2],departure:'waiting',previousHealth:1,evasiveUntil:0,evasiveDirection:1,evasiveDive:.5,evasiveTurnAt:0,emergencyField:-1,emergencyDirection:1,emergencyStage:'approach'};
       this.planes.push(p);if(id!==0)this.spawn(p);
     }
   }
@@ -74,11 +94,11 @@ export class Battle {
     if(this.planes.some(other=>other!==p&&!other.sim.crashed&&other.sim.position.distanceTo(position)<24)){p.respawnAt=this.time+2;return;}
     p.sim.spawn.copy(position);
     const s=p.sim;s.reset();p.gun.reset();p.secondary.reset();p.rear.reset();p.gun.cock();p.secondary.cock();p.rear.cock();p.respawnQueued=false;p.generation++;p.target=-1;p.cooldown=0;p.runTarget='';p.runStage='approach';
-    p.departure='waiting';p.mode='WAITING FOR RUNWAY';p.previous.copy(s.position);p.rotation.copy(s.orientation);p.previousHealth=1;p.evasiveUntil=0;p.evasiveTurnAt=0;
+    p.departure='waiting';p.mode='WAITING FOR RUNWAY';p.rearAim.copy(rearGunnerIdleDirection(this.time,p.id));p.previous.copy(s.position);p.rotation.copy(s.orientation);p.previousHealth=1;p.evasiveUntil=0;p.evasiveTurnAt=0;p.emergencyField=-1;p.emergencyStage='approach';
   }
-  info():BattleInfo{return{team:this.playerTeam,counts:{ALLIED:this.planes.filter(p=>p.team==='ALLIED'&&!p.sim.crashed).length,CENTRAL:this.planes.filter(p=>p.team==='CENTRAL'&&!p.sim.crashed).length},bombs:this.planes[0].sim.bombsRemaining,ammo:this.planes[0].gun.roundsRemaining,health:this.planes[0].sim.airframeHealth,respawn:Math.max(0,this.planes[0].respawnAt-this.time),message:this.message,enemyBuildingsBombed:this.enemyBuildingsBombed,enemyAircraftStrafed:this.enemyAircraftStrafed,enemyAircraftKills:this.enemyAircraftKills,enemyAircraftBombed:this.enemyAircraftBombed,contacts:this.planes.filter(p=>!p.sim.crashed).map(p=>({id:p.id,team:p.team,x:p.sim.position.x,z:p.sim.position.z}))};}
+  info():BattleInfo{return{team:this.playerTeam,counts:{ALLIED:this.planes.filter(p=>p.team==='ALLIED'&&!p.sim.crashed).length,CENTRAL:this.planes.filter(p=>p.team==='CENTRAL'&&!p.sim.crashed).length},bombs:this.planes[0].sim.bombsRemaining,ammo:this.planes[0].gun.roundsRemaining,health:this.planes[0].sim.airframeHealth,respawn:Math.max(0,this.planes[0].respawnAt-this.time),message:this.message,notifications:[...this.notifications],enemyBuildingsBombed:this.enemyBuildingsBombed,enemyAircraftStrafed:this.enemyAircraftStrafed,enemyAircraftKills:this.enemyAircraftKills,enemyAircraftBombed:this.enemyAircraftBombed,contacts:this.planes.filter(p=>!p.sim.crashed).map(p=>({id:p.id,team:p.team,x:p.sim.position.x,z:p.sim.position.z}))};}
   setPlayerTeam(team:Team){this.playerTeam=team;this.planes[0].team=team;}
-  respawnPlayer(){const p=this.planes[0];if(!p.sim.crashed||!p.respawnQueued||this.time<p.respawnAt)return false;if(this.planes.slice(1).some(o=>!o.sim.crashed&&o.sim.position.distanceTo(p.sim.spawn)<24))return false;p.sim.reset();p.gun.reset();p.secondary.reset();p.rear.reset();p.respawnQueued=false;p.generation++;p.previous.copy(p.sim.position);p.rotation.copy(p.sim.orientation);return true;}
+  respawnPlayer(){const p=this.planes[0];if(!p.sim.crashed||!p.respawnQueued||this.time<p.respawnAt)return false;if(this.planes.slice(1).some(o=>!o.sim.crashed&&o.sim.position.distanceTo(p.sim.spawn)<24))return false;p.sim.reset();p.gun.reset();p.secondary.reset();p.rear.reset();p.respawnQueued=false;p.generation++;p.previous.copy(p.sim.position);p.rotation.copy(p.sim.orientation);p.emergencyField=-1;return true;}
   retirePlayer(cause='ABANDONED AIRCRAFT'){
     const p=this.planes[0];if(!p.sim.crashed)p.sim.crash(cause);this.recordCrashes();return true;
   }
@@ -100,18 +120,20 @@ export class Battle {
       for(const target of this.parkedPlanes)if(!target.destroyed){const t=segmentBox(b.previous,b.position,target.bounds);if(t!==null&&(hit===null||t<hit))hit=t;}
       if(hit!==null){b.position.lerpVectors(b.previous,b.position,hit);this.explode(b);this.bombs.splice(i,1);}else if(b.age>90)this.bombs.splice(i,1);
     }
+    for(const p of this.planes)this.restock(p,dt);
     for(const blast of this.blasts)blast.age+=dt;this.blasts=this.blasts.filter(b=>b.age<5);
     this.recordCrashes();
+    this.monitorPlayer();
   }
   private explode(b:Bomb){
     this.blasts.push({id:++this.serial,position:b.position.clone(),age:0});if(this.blasts.length>32)this.blasts.shift();
     this.pushEffect({kind:'explosion',position:b.position.clone(),velocity:b.velocity.clone(),intensity:1});
-    for(const building of this.buildings){if(building.destroyed)continue;if(building.bounds.distanceToPoint(b.position)<=22){building.destroyed=true;if(b.ownerId===0&&building.team!==b.team)this.enemyBuildingsBombed++;this.message=`${building.kind} DESTROYED`;}}
+    for(const building of this.buildings){if(building.destroyed)continue;if(building.bounds.distanceToPoint(b.position)<=22){building.destroyed=true;if(b.ownerId===0){if(building.team!==b.team){this.enemyBuildingsBombed++;this.notify('Building destroyed','positive');}else this.noteFriendlyFire();}this.message=`${building.kind} DESTROYED`;}}
     for(const target of this.parkedPlanes)if(!target.destroyed&&target.bounds.distanceToPoint(b.position)<BLAST_KILL_RADIUS)this.destroyParked(target,b.team,'BOMBED',b.ownerId);
-    for(const p of this.planes)if(!p.sim.crashed&&p.sim.position.distanceTo(b.position)<BLAST_KILL_RADIUS){if(b.ownerId===0&&p.id!==0&&p.team!==b.team)this.enemyAircraftBombed++;p.sim.crash('BOMB BLAST');}
+    for(const p of this.planes)if(!p.sim.crashed&&p.sim.position.distanceTo(b.position)<BLAST_KILL_RADIUS){if(b.ownerId===0&&p.id!==0){if(p.team!==b.team){this.enemyAircraftBombed++;this.notify('Enemy aircraft destroyed','positive');}else this.noteFriendlyFire();}p.sim.crash('BOMB BLAST');}
   }
   private destroyParked(target:ParkedPlane,attacker:Team,reason:string,ownerId=-1){
-    if(target.destroyed)return;target.destroyed=true;target.health=0;if(ownerId===0&&attacker!==target.team&&reason==='DESTROYED')this.enemyAircraftStrafed++;this.pushEffect({kind:'explosion',position:target.position.clone(),velocity:new T.Vector3(),intensity:.65});this.message=`PARKED AIRCRAFT ${reason}`;
+    if(target.destroyed)return;target.destroyed=true;target.health=0;if(ownerId===0){if(attacker!==target.team){if(reason==='DESTROYED')this.enemyAircraftStrafed++;this.notify('Ground aircraft destroyed','positive');}else this.noteFriendlyFire();}this.pushEffect({kind:'explosion',position:target.position.clone(),velocity:new T.Vector3(),intensity:.65});this.message=`PARKED AIRCRAFT ${reason}`;
   }
   private bulletHit(shooter:Plane,from:T.Vector3,to:T.Vector3,rear=false){
     let first=terrainHit(from,to,this.surface),victim:Plane|undefined,parkedVictim:ParkedPlane|undefined;
@@ -122,17 +144,49 @@ export class Battle {
       const boxes=[new T.Box3(new T.Vector3(-.7,-.7,-3.6),new T.Vector3(.7,.7,4.5*p.sim.spec.length)),new T.Box3(new T.Vector3(-p.sim.spec.span/2,-.5,-2.25),new T.Vector3(p.sim.spec.span/2,-.1,-.55)),new T.Box3(new T.Vector3(-p.sim.spec.span/2,1.25,-2.25),new T.Vector3(p.sim.spec.span/2,1.7,-.55))];
       for(const box of boxes){const t=segmentBox(a,b,box);if(t!==null&&(first===null||t<first)){first=t;victim=p;parkedVictim=undefined;}}
     }
-    if(victim&&first!==null){const wasGrounded=victim.sim.grounded,wasCrashed=victim.sim.crashed;victim.sim.damage(gunHitDamage(victim.sim.aircraftType,rear));if(!wasCrashed&&victim.sim.crashed&&shooter.id===0&&victim.team!==shooter.team){if(wasGrounded)this.enemyAircraftStrafed++;else this.enemyAircraftKills++;}this.pushEffect({kind:'damage',position:from.clone().lerp(to,first),velocity:victim.sim.velocity.clone(),intensity:.8,targetId:victim.id});}
-    else if(parkedVictim&&first!==null){parkedVictim.health-=gunHitDamage(parkedVictim.type,rear);this.pushEffect({kind:'damage',position:from.clone().lerp(to,first),velocity:new T.Vector3(),intensity:.8});if(parkedVictim.health<=0)this.destroyParked(parkedVictim,shooter.team,'DESTROYED',shooter.id);}
+    if(victim&&first!==null){const wasGrounded=victim.sim.grounded,wasCrashed=victim.sim.crashed;victim.sim.damage(gunHitDamage(victim.sim.aircraftType,rear));if(this.random()<.1){victim.sim.fuelLeaks++;if(victim.id===0)this.notify(victim.sim.fuelLeaks===1?'Fuel leak':`Fuel leaks ×${victim.sim.fuelLeaks}`,'warning');}if(shooter.id===0){if(victim.team===shooter.team)this.noteFriendlyFire();else if(!wasCrashed&&victim.sim.crashed){if(wasGrounded){this.enemyAircraftStrafed++;this.notify('Ground aircraft destroyed','positive');}else{this.enemyAircraftKills++;this.notify('Enemy aircraft destroyed','positive');}}}this.pushEffect({kind:'damage',position:from.clone().lerp(to,first),velocity:victim.sim.velocity.clone(),intensity:.8,targetId:victim.id});}
+    else if(parkedVictim&&first!==null){if(shooter.id===0&&parkedVictim.team===shooter.team)this.noteFriendlyFire();parkedVictim.health-=gunHitDamage(parkedVictim.type,rear);this.pushEffect({kind:'damage',position:from.clone().lerp(to,first),velocity:new T.Vector3(),intensity:.8});if(parkedVictim.health<=0)this.destroyParked(parkedVictim,shooter.team,'DESTROYED',shooter.id);}
     return first;
   }
+  private notify(text:string,tone:NotificationTone){
+    this.notifications.push({id:++this.notificationSerial,text,tone});if(this.notifications.length>32)this.notifications.shift();
+  }
+  private noteFriendlyFire(){if(this.time-this.lastFriendlyFire<4)return;this.lastFriendlyFire=this.time;this.notify('Friendly fire','warning');}
+  private restock(p:Plane,dt:number){
+    const field=runwayAt(p.sim),friendly=field>=0&&AIRFIELDS[field].team===p.team;
+    if(!friendly){this.servicing.delete(p.id);this.fuelRestocked.delete(p.id);this.ammoRestocked.delete(p.id);return;}
+    const s=p.sim,guns=[p.gun,...(s.aircraftType==='fighter'?[p.secondary]:[]),...(s.aircraftType==='bomber'?[p.rear]:[])];
+    const needsFuel=s.fuel<s.spec.fuel-.001,needsAmmo=guns.some(g=>g.roundsRemaining<g.capacity);
+    if((needsFuel||needsAmmo)&&!this.servicing.has(p.id)){this.servicing.add(p.id);if(p.id===0)this.notify('Resupplying','positive');}
+    const beforeFuel=s.fuel;s.fuel=Math.min(s.spec.fuel,s.fuel+FUEL_RESTOCK_RATE*dt);
+    if(beforeFuel<s.spec.fuel-.001&&s.fuel>=s.spec.fuel-.001&&!this.fuelRestocked.has(p.id)){this.fuelRestocked.add(p.id);if(p.id===0)this.notify('Fuel replenished','positive');}
+    const hadMissingAmmo=needsAmmo;
+    for(const gun of guns)if(gun.roundsRemaining<gun.capacity){const progress=(this.ammoRestockProgress.get(gun)??0)+AMMO_RESTOCK_RATE*dt,rounds=Math.floor(progress+1e-9);this.ammoRestockProgress.set(gun,progress-rounds);if(rounds>0)gun.roundsRemaining=Math.min(gun.capacity,gun.roundsRemaining+rounds);}
+    if(hadMissingAmmo&&guns.every(g=>g.roundsRemaining>=g.capacity)&&!this.ammoRestocked.has(p.id)){this.ammoRestocked.add(p.id);if(p.id===0)this.notify('Ammunition replenished','positive');}
+  }
+  private monitorPlayer(){
+    const p=this.planes[0],s=p.sim,w=this.warningState;if(s.crashed){for(const key of Object.keys(w) as (keyof typeof w)[])w[key]=false;return;}
+    const warn=(condition:boolean,key:keyof typeof w,text:string,resetCondition=!condition)=>{if(condition&&!w[key]){w[key]=true;this.notify(text,'warning');}else if(resetCondition)w[key]=false;};
+    const empty=s.fuel<=0;warn(empty,'fuelEmpty','Fuel empty',s.fuel>s.spec.fuel*.05);
+    warn(s.fuel>0&&s.fuel<=s.spec.fuel*.2,'fuelLow','Fuel low',s.fuel>s.spec.fuel*.3);
+    warn(s.engine==='running'&&s.mixtureEfficiency<.55,'badMixture','Bad mixture',s.engine!=='running'||s.mixtureEfficiency>.62);
+    warn(s.temperature>110,'overheating','Engine overheating',s.temperature<105);
+    warn(s.engine==='running'&&s.rpm>2100,'overspeed','Engine overspeed',s.rpm<2050);
+    warn(s.stall,'stall','Stall');
+    warn(s.engine==='seized','seized','Engine seized');
+    warn(p.gun.jammed,'rightJammed',s.aircraftType==='fighter'?'Right gun jammed':'Gun jammed');
+    warn(s.aircraftType==='fighter'&&p.secondary.jammed,'leftJammed','Left gun jammed');
+  }
   private stepGun(p:Plane,gun:MachineGun,rear:boolean,dt:number,lateral=.34){
-    const s=p.sim;const direction=forwardGunDirection(s.orientation);let muzzle=new T.Vector3(lateral,.505,-3.6).applyQuaternion(s.orientation).add(s.position);
-    if(rear){gun.trigger=false;muzzle=new T.Vector3(.22,.7,2.7).applyQuaternion(s.orientation).add(s.position);
+    const s=p.sim;const direction=forwardGunDirection(s.orientation),muzzle=new T.Vector3(lateral,.505,-3.6).applyQuaternion(s.orientation).add(s.position);
+    if(rear){gun.trigger=false;p.rearAim.copy(rearGunnerIdleDirection(this.time,p.id));
       const target=this.planes.filter(e=>e.team!==p.team&&!e.sim.crashed).sort((a,b)=>a.sim.position.distanceToSquared(s.position)-b.sim.position.distanceToSquared(s.position))[0];
-      if(target){const delta=target.sim.position.clone().sub(muzzle),dist=delta.length(),local=delta.clone().applyQuaternion(s.orientation.clone().invert());
-        if(dist<450&&local.z>40&&Math.abs(local.x)<local.z*1.5&&local.y>Math.max(8,local.z*.06)&&local.y<local.z){direction.copy(delta).addScaledVector(target.sim.velocity.clone().sub(s.velocity),dist/REAR_GUN_MUZZLE_VELOCITY).normalize();gun.trigger=gun.heat<.55&&this.time%2.5<1.2;}
+      const pivot=new T.Vector3(.22,.48,2.45).applyQuaternion(s.orientation).add(s.position);
+      if(target){const delta=target.sim.position.clone().sub(pivot),dist=delta.length(),local=delta.clone().applyQuaternion(s.orientation.clone().invert());
+        if(dist<450&&local.z>40&&Math.abs(local.x)<local.z*1.5&&local.y>Math.max(8,local.z*.06)&&local.y<local.z){direction.copy(delta).addScaledVector(target.sim.velocity.clone().sub(s.velocity),dist/REAR_GUN_MUZZLE_VELOCITY).normalize();p.rearAim.copy(direction).applyQuaternion(s.orientation.clone().invert()).normalize();gun.trigger=gun.heat<.55&&this.time%2.5<1.2;}
       }
+      direction.copy(rearGunnerShotDirection(p.rearAim,this.time,p.id)).applyQuaternion(s.orientation).normalize();
+      muzzle.copy(pivot).addScaledVector(direction,1.05);
       if((gun.jammed||!gun.cocked)&&this.time%4<dt)gun.cock();
     }
     if(gun.trigger&&(p.id!==0||rear)){
@@ -150,6 +204,7 @@ export class Battle {
   private pushEffect(effect:EffectEvent){this.effects.push(effect);if(this.effects.length>128)this.effects.shift();}
   private flyAI(p:Plane,dt:number){
     const s=p.sim,c=s.controls,a=readAttitude(s.orientation),forward=new T.Vector3(0,0,-1).applyQuaternion(s.orientation);
+    if(s.fuel<=0||p.emergencyField>=0){this.landAI(p);return;}
     c.ignition=true;c.brake=false;c.mixture=optimalMixture(s.position.y);c.radiator=s.temperature>95?.9:.45;c.throttle=1;
     if(p.departure!=='flying'){this.departAI(p);return;}
     if(s.airframeHealth<p.previousHealth-.001&&(this.time<p.evasiveUntil||this.random()<.68)){p.evasiveUntil=this.time+15+this.random()*10;p.evasiveDirection=this.random()<.5?-1:1;p.evasiveDive=.35+this.random()*.65;p.evasiveTurnAt=this.time+1+this.random()*3;p.target=-1;p.decision=.35;}p.previousHealth=s.airframeHealth;
@@ -204,6 +259,20 @@ export class Battle {
     c.pitch=pitchInputForAlpha(alpha,s.dynamicPressure);
     c.throttle=clamp(.9+(desiredSpeed-s.airspeed)*.065,.25,1);if(Math.abs(a.roll)>.35||goal.y>s.position.y+30)c.throttle=1;
     if(s.position.y<floor-30){c.throttle=1;c.roll=clamp(a.roll*3,-1,1);c.pitch=Math.max(c.pitch,.48);p.mode='TERRAIN AVOIDANCE';}
+  }
+  private landAI(p:Plane){
+    const s=p.sim,c=s.controls;c.ignition=true;c.throttle=0;c.mixture=optimalMixture(s.position.y);c.radiator=1;p.gun.trigger=false;p.secondary.trigger=false;p.rear.trigger=false;
+    if(p.emergencyField<0){const fields=AIRFIELDS.map((f,i)=>({f,i})).filter(({f})=>f.team===p.team).sort((a,b)=>Math.hypot(s.position.x-a.f.x,s.position.z-a.f.z)-Math.hypot(s.position.x-b.f.x,s.position.z-b.f.z));p.emergencyField=fields[0].i;p.emergencyDirection=s.position.z>=fields[0].f.z?1:-1;p.emergencyStage='approach';}
+    if(s.grounded){c.brake=true;c.pitch=0;c.roll=0;p.mode='EMERGENCY LANDED';if(s.fuel>=s.spec.fuel*.35){p.emergencyField=-1;p.departure='takeoff';c.brake=false;}return;}
+    c.brake=false;const field=AIRFIELDS[p.emergencyField],base=this.terrain.airfieldHeights[p.emergencyField],direction=p.emergencyDirection;
+    const approach=new T.Vector3(field.x,base+70,field.z+direction*650);if(p.emergencyStage==='approach'&&Math.hypot(s.position.x-approach.x,s.position.z-approach.z)<180)p.emergencyStage='final';
+    const goal=p.emergencyStage==='approach'?approach:new T.Vector3(field.x,base+1.6,field.z-direction*360);p.mode=p.emergencyStage==='approach'?'GLIDE TO RUNWAY':'EMERGENCY LANDING';
+    const attitude=readAttitude(s.orientation),forward=new T.Vector3(0,0,-1).applyQuaternion(s.orientation),delta=goal.clone().sub(s.position),heading=Math.atan2(-forward.x,-forward.z),wanted=Math.atan2(-delta.x,-delta.z),error=Math.atan2(Math.sin(wanted-heading),Math.cos(wanted-heading));
+    let bank=clamp(error*1.25,-.38,.38);if(s.airspeed<27)bank=clamp(bank,-.22,.22);c.roll=clamp((attitude.roll-bank)*2.8+s.rates.z*1.3,-1,1);
+    const flightAngle=Math.atan2(s.velocity.y,Math.hypot(s.velocity.x,s.velocity.z)),desiredClimb=clamp((goal.y-s.position.y)*.022,-5,3),desiredAngle=clamp(Math.asin(clamp(desiredClimb/Math.max(22,s.airspeed),-.28,.2)),-.16,.12);
+    const density=1.225*Math.exp(-s.position.y/8500),neededCl=s.mass*9.81/(.5*density*Math.max(23,s.airspeed)**2*s.spec.wingArea*Math.max(.72,Math.cos(attitude.roll)));let alpha=clamp((neededCl-.24)/4.7+(desiredAngle-flightAngle)*.8,.025,.2);
+    if(s.airspeed<24||s.stall){alpha=.045;c.roll=clamp(attitude.roll*3,-1,1);p.mode='GLIDE RECOVERY';}c.pitch=pitchInputForAlpha(alpha,s.dynamicPressure);
+    const lookAhead=this.surface(s.position.x+forward.x*180,s.position.z+forward.z*180),clearance=p.emergencyStage==='final'?3:18;if(s.position.y<lookAhead+clearance){c.roll=clamp(attitude.roll*3,-1,1);c.pitch=Math.max(c.pitch,.36);}
   }
   private departAI(p:Plane){
     const s=p.sim,c=s.controls,field=AIRFIELDS[p.homeField],base=this.terrain.airfieldHeights[p.homeField];p.gun.trigger=false;p.secondary.trigger=false;c.pitch=0;c.roll=0;

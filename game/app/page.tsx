@@ -17,6 +17,7 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip';
 import type { FlightGame, FlightInfo } from '@/lib/flight/game';
+import type { NotificationEvent } from '@/lib/flight/battle';
 import { AIRCRAFT, type AircraftType } from '@/lib/flight/aircraft';
 import { AIRFIELDS, riverX } from '@/lib/flight/terrain';
 import {
@@ -50,7 +51,9 @@ export default function Home() {
   const [achievements, setAchievements] = useState(initialAchievements.current);
   const [celebration, setCelebration] = useState('');
   const [missionIntro, setMissionIntro] = useState(false);
-  const aircraft = AIRCRAFT[info?.aircraftType ?? 'scout'];
+  const [showControls, setShowControls] = useState(true);
+  const [notifications, setNotifications] = useState<(NotificationEvent & { expiresAt: number })[]>([]);
+  const seenNotifications = useRef(new Set<number>());
   const battle = info?.battle;
   const currentAchievement = ACHIEVEMENTS.find(
     (achievement) => !achievements.completed[achievement.id],
@@ -125,6 +128,18 @@ export default function Home() {
     const timeout = window.setTimeout(() => setMissionIntro(false), 3200);
     return () => window.clearTimeout(timeout);
   }, [missionIntro]);
+  useEffect(() => {
+    const incoming=(info?.battle.notifications??[]).filter(notification=>!seenNotifications.current.has(notification.id));
+    if(!incoming.length)return;
+    const expiresAt=Date.now()+4200;for(const notification of incoming)seenNotifications.current.add(notification.id);
+    setNotifications(current=>[...current,...incoming.map(notification=>({...notification,expiresAt}))].slice(-4));
+  },[info?.battle.notifications]);
+  useEffect(()=>{
+    if(!notifications.length)return;
+    const delay=Math.max(0,Math.min(...notifications.map(notification=>notification.expiresAt))-Date.now());
+    const timeout=window.setTimeout(()=>setNotifications(current=>current.filter(notification=>notification.expiresAt>Date.now())),delay+20);
+    return()=>window.clearTimeout(timeout);
+  },[notifications]);
   return (
     <TooltipProvider>
     <main className={`flight-app ${hangar ? 'hangar-open' : ''}`}>
@@ -160,19 +175,6 @@ export default function Home() {
             )}
           </aside>
           <div className="flight-tools">
-            {aircraft.bombs > 0 && (
-              <Button
-                variant="ghost"
-                disabled={
-                  !ready ||
-                  info?.crashed ||
-                  (battle?.bombs ?? 0) === 0
-                }
-                onClick={() => game.current?.releaseBomb()}
-              >
-                BOMBS {battle?.bombs ?? 0}
-              </Button>
-            )}
             <Button
               variant="ghost"
               disabled={!ready}
@@ -195,6 +197,21 @@ export default function Home() {
           <strong>{celebration}</strong>
         </output>
       )}
+      {!hangar&&notifications.length>0&&(
+        <section className="flight-notifications" aria-live="polite" aria-label="Flight notifications">
+          {notifications.map(notification=><output key={notification.id} className={`flight-notification ${notification.tone}`}>{notification.text}</output>)}
+        </section>
+      )}
+      {!hangar&&(
+        showControls?<aside className="controls-guide" aria-label="Basic flight controls">
+          <div><strong>CONTROLS</strong><button type="button" onClick={()=>setShowControls(false)} aria-label="Hide controls">HIDE</button></div>
+          <p><kbd>LEFT CLICK</kbd><span>Left hand</span></p>
+          <p><kbd>RIGHT CLICK</kbd><span>Right hand</span></p>
+          <p><kbd>DRAG</kbd><span>Operate control</span></p>
+          <p><kbd>W A S D</kbd><span>Look</span></p>
+          <p><kbd>Q / E</kbd><span>Lean</span></p>
+        </aside>:<button type="button" className="controls-show" onClick={()=>setShowControls(true)}>CONTROLS</button>
+      )}
       {!ready && (
         <output className="loading-flight">
           {error || 'Preparing your aircraft…'}
@@ -208,7 +225,7 @@ export default function Home() {
         }}
       >
         <DialogContent className="flight-manual hangar-menu">
-          <DialogTitle>Sortie hangar</DialogTitle>
+          <DialogTitle>Super Flight WW1</DialogTitle>
           <DialogDescription>
             Choose any aircraft and airfield. Your airfield determines your side,
             and you can change sides whenever you return here. The world continues
@@ -343,7 +360,9 @@ export default function Home() {
               to open it; one and a half turns spans each range. Use roughly 85%
               mixture near sea level and lean toward 30% by 2,000 m. An open
               radiator cools better but adds drag. Poor mixture, overheating,
-              excessive RPM, or empty fuel can stop or damage the engine.
+              excessive RPM, or empty fuel can stop or damage the engine. Bullet
+              hits have a chance to open cumulative fuel leaks. Land on a friendly
+              runway to replenish fuel and ammunition over time.
             </dd>
             <dt>Machine gun</dt>
             <dd>

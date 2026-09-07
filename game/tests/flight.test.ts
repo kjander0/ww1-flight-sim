@@ -1,13 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Euler, Vector3, PerspectiveCamera, Quaternion } from 'three';
-import { BRAKE_DECELERATION, FlightSimulation, DT, SPEC, coefficients, optimalMixture } from '../lib/flight/simulation';
+import { BRAKE_DECELERATION, FlightSimulation, DT, FUEL_LEAK_RATE, SPEC, coefficients, optimalMixture } from '../lib/flight/simulation';
 import { BRAKE_SHAKE_RPM, PILOT_HEIGHT, blastShakeAmount, brakeButtonPose, bombButtonAction, cockingJamKick, crashShakeKick, damageShakeKick, explosionLevel, gunBarrelAppearance, movePilotLateral, overspeedShakeAmount, resolveMouseControl } from '../lib/flight/game';
 import { AIRCRAFT } from '../lib/flight/aircraft';
 
 function run(s: FlightSimulation, seconds: number, control?: (s: FlightSimulation) => void) {
   for (let i = 0; i < Math.round(seconds / DT); i++) { control?.(s); s.step(); }
 }
+test('each fuel leak drains its own fast, cumulative stream',()=>{
+  const s=new FlightSimulation();s.windEnabled=false;s.fuel=10;s.fuelLeaks=2;run(s,4);assert.ok(Math.abs(s.fuel-(10-2*FUEL_LEAK_RATE*4))<1e-9);s.reset();assert.equal(s.fuelLeaks,0);
+});
 test('an existing mouse-hand binding wins while the other button is held',()=>{
   assert.equal(resolveMouseControl('yoke','trigger',true),'trigger');
   assert.equal(resolveMouseControl('yoke','trigger',false),'yoke');
